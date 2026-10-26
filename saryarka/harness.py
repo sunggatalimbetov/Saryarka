@@ -14,6 +14,12 @@ Decision rules (agreed 26 Oct):
     two thirds of the matches
   * the noisy baseline must rank the windows like the published full match: 50 > 125 > 25 > raw
   * anything tuned is tuned leave-one-match-out, see lomo()
+
+Known bias (accepted 26 Oct): Metrica's event-based possessions are shorter (10-11 s mean) than the
+organisers' (14 s on the public slice), so the harness leans toward shorter windows. Calibration
+passes on all three games, but 25 and 125 are a near tie (match 3 favours 125, matches 1-2 favour 25)
+where the real match has 125 ahead by 0.025. Choices between nearby windows need a margin.
+Noise settings are locked as of this commit.
 """
 
 import argparse
@@ -129,7 +135,7 @@ def report(rows, versions, windows):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--games", type=int, nargs="+", default=list(external.CSV_GAMES))
+    parser.add_argument("--games", type=int, nargs="+", default=list(external.GAMES))
     parser.add_argument("--versions", nargs="+", default=list(VERSIONS))
     parser.add_argument("--windows", type=int, nargs="+", default=list(WINDOWS))
     parser.add_argument("--seeds", type=int, default=5)

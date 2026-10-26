@@ -16,7 +16,9 @@ compares versions of our method against each other with them, it never predicts 
 """
 
 import csv
+import json
 import os
+import xml.etree.ElementTree as ET
 import sys
 
 import numpy as np
@@ -34,8 +36,10 @@ METRICA = os.path.join(ROOT, "data", "external", "metrica-sample-data", "data")
 FPS = 25
 PITCH = (105.0, 68.0)  # metres, per the Metrica sample-data README
 CSV_GAMES = (1, 2)
+EPTS_GAMES = (3,)
+GAMES = CSV_GAMES + EPTS_GAMES
 
-ON_BALL = {"PASS", "SET PIECE", "RECOVERY", "SHOT", "BALL LOST"}
+ON_BALL = {"PASS", "CARRY", "SET PIECE", "RECOVERY", "SHOT", "BALL LOST"}  # CARRY: game 3 only
 # Restart types in Smart Tagging's vocabulary, so the same quick-win code reads both.
 SET_PIECE_TYPES = {"THROW IN": "throw-in", "CORNER KICK": "corner kick", "FREE KICK": "free kick",
                    "KICK OFF": "kick off"}
@@ -58,7 +62,7 @@ def ball_killer(kind, subtype):
 def restart_kind(kind, subtype):
     """Smart-Tagging-style restart type for an event that restarts play, else None."""
     if kind == "SET PIECE":
-        return SET_PIECE_TYPES.get(subtype)
+        return SET_PIECE_TYPES.get(subtype.split("-")[0])  # game 3: FREE KICK-INDIRECT etc.
     if kind in ("PASS", "BALL LOST") and subtype.startswith("GOAL KICK"):
         return "goal kick"
     return None
@@ -73,7 +77,11 @@ def read_events(game):
              "start": int(row["Start Frame"]) - 1, "end": int(row["End Frame"]) - 1,  # 0-based
              "x": float(row["Start X"]) * PITCH[0], "y": float(row["Start Y"]) * PITCH[1]}
               for row in rows]
-    # A SET PIECE row carries no location; the pass that takes it, logged next, does.
+    return fill_locations(events)
+
+
+def fill_locations(events):
+    """A SET PIECE row carries no location; the pass that takes it, logged next, does."""
     for index, event in enumerate(events):
         if np.isnan(event["x"]):
             later = next((e for e in events[index + 1:index + 4]
@@ -81,6 +89,73 @@ def read_events(game):
             if later:
                 event["x"], event["y"] = later["x"], later["y"]
     return events
+
+
+def read_events_json(game):
+    """Game 3's JSON events in the same shape as read_events(); subtypes joined with '-'."""
+    folder = os.path.join(METRICA, "Sample_Game_{0}".format(game))
+    with open(os.path.join(folder, "Sample_Game_{0}_events.json".format(game))) as handle:
+        data = json.load(handle)["data"]
+    home = epts_home_team(game)
+    events = []
+    for row in data:
+        subtypes = row.get("subtypes") or []
+        if isinstance(subtypes, dict):
+            subtypes = [subtypes]
+        start = row["start"]
+        events.append({"team": HOME if row["team"]["id"] == home else AWAY, "type": row["type"]["name"],
+                       "subtype": "-".join(sub["name"] for sub in subtypes), "period": int(row["period"]),
+                       "start": int(start["frame"]) - 1, "end": int(row["end"]["frame"]) - 1,
+                       "x": (start["x"] if start["x"] is not None else np.nan) * PITCH[0],
+                       "y": (start["y"] if start["y"] is not None else np.nan) * PITCH[1]})
+    return fill_locations(events)
+
+
+def epts_metadata(game):
+    folder = os.path.join(METRICA, "Sample_Game_{0}".format(game))
+    return ET.parse(os.path.join(folder, "Sample_Game_{0}_metadata.xml".format(game))).getroot(), folder
+
+
+def epts_home_team(game):
+    root, _ = epts_metadata(game)
+    return next(root.iter("Team")).get("id")  # first team listed = home, the EPTS convention
+
+
+def read_tracking_epts(game):
+    """(period, players_xy, team_of_slot, ball) from an EPTS file whose player list changes per block."""
+    root, folder = epts_metadata(game)
+    home = epts_home_team(game)
+    player_ids = [player.get("id") for player in root.iter("Player")]
+    team_of_slot = np.array([HOME if player.get("teamId") == home else AWAY for player in root.iter("Player")],
+                            dtype=np.int8)
+    slot_of = {pid: index for index, pid in enumerate(player_ids)}
+    channel_player = {ch.get("id"): ch.get("playerId") for ch in root.iter("PlayerChannel")}
+    blocks = []
+    for spec in root.iter("DataFormatSpecification"):
+        refs = [ref.get("playerChannelId") for ref in spec.iter("PlayerChannelRef")]
+        slots = [slot_of[channel_player[ref]] for ref in refs if ref.endswith("_x")]
+        blocks.append((int(spec.get("startFrame")), int(spec.get("endFrame")), np.array(slots)))
+    params = {p.findtext("Name"): p.findtext("Value") for p in root.iter("ProviderParameter")}
+    n = max(end for _, end, _ in blocks)
+    period = np.zeros(n, dtype=int)
+    for half, key in ((1, "first_half"), (2, "second_half")):
+        period[int(params[key + "_start"]) - 1:int(params[key + "_end"])] = half
+
+    length, width = PITCH
+    players = np.full((n, len(player_ids), 2), np.nan)
+    ball = np.full((n, 3), np.nan)
+    block = 0
+    with open(os.path.join(folder, "Sample_Game_{0}_tracking.txt".format(game))) as handle:
+        for line in handle:
+            frame_text, people, ball_text = line.strip().split(":")
+            frame = int(frame_text)
+            while frame > blocks[block][1]:
+                block += 1
+            xy = np.array([g.split(",") for g in people.split(";")], dtype=float)
+            players[frame - 1, blocks[block][2]] = xy * (length, width)
+            bx, by = (float(v) for v in ball_text.split(",")[:2])
+            ball[frame - 1, :2] = (bx * length, by * width)
+    return period, players, team_of_slot, ball
 
 
 def read_tracking(game):
@@ -130,11 +205,15 @@ def labels_from_events(events, period, n_frames):
                     restart = AFTER_GOAL_KICKOFF
                 restarts.append((event["start"], restart, event["x"], event["y"]))
             # Any on-ball event revives a dead ball, logged restart or not: play has visibly resumed.
-            if kind in ON_BALL and (state == "D" or event["team"] != owner):
+            # One that began before the ball died (game 3 logs carries overlapping the ball-out)
+            # cannot.
+            if event["start"] < cursor:
+                pass
+            elif kind in ON_BALL and (state == "D" or event["team"] != owner):
                 labels[cursor:event["start"]] = "D" if state == "D" else "HA"[owner]
                 state, owner, cursor = "alive", event["team"], event["start"]
             killer = ball_killer(kind, subtype)
-            if killer and state == "alive":
+            if killer and state == "alive" and event[killer] + (killer == "end") >= cursor:
                 frame = event[killer] + 1 if killer == "end" else event["start"]
                 frame = max(frame, cursor)
                 labels[cursor:frame] = "HA"[owner]
@@ -161,9 +240,14 @@ def perfect_tags(restarts, fps=FPS):
 
 
 def metrica_match(game):
-    """(Match with perfect tags, answers, true restarts) for a Metrica CSV game."""
-    period, players, team_of_slot, ball = read_tracking(game)
-    labels, restarts = labels_from_events(read_events(game), period, len(period))
+    """(Match with perfect tags, answers, true restarts) for a Metrica sample game."""
+    if game in EPTS_GAMES:
+        period, players, team_of_slot, ball = read_tracking_epts(game)
+        events = read_events_json(game)
+    else:
+        period, players, team_of_slot, ball = read_tracking(game)
+        events = read_events(game)
+    labels, restarts = labels_from_events(events, period, len(period))
     match = Match("metrica{}".format(game), players, team_of_slot, ball, perfect_tags(restarts),
                   None, FPS, PITCH)
     return match, labels, restarts
@@ -185,7 +269,7 @@ def summary(name, labels, restarts, fps=FPS):
 
 
 if __name__ == "__main__":
-    for game in CSV_GAMES:
+    for game in GAMES:
         match, labels, restarts = metrica_match(game)
         print(summary(match.name, labels, restarts))
         print("    ball missing on {:.1f}% of graded frames".format(

@@ -30,6 +30,7 @@ N_QUANTILES = 101
 DIST_QUANTILES = (10, 25, 50, 75, 90)  # ball to nearest player, m
 IMPULSE_LAGS = (1, 3, 6, 12)            # frames each side for |v_out - v_in|
 FREE_FLIGHT_M = 5.0                     # impulse measured where no player is this close
+NEAR_PLAYER_M = 1.5                     # ... and here where one is: kicks show up (or not)
 
 
 def run_lengths(mask):
@@ -80,11 +81,14 @@ def position_summary(ball, players, team_of_slot, fps, live):
     from touches import impulse, nearest
     dist, _ = nearest(ball, players, team_of_slot)
     seen = np.isfinite(dist) & live
-    out = {"dist_quantiles": np.percentile(dist[seen], DIST_QUANTILES).tolist(), "impulse_p90": []}
+    out = {"dist_quantiles": np.percentile(dist[seen], DIST_QUANTILES).tolist(), "impulse_p90": [],
+           "near_impulse_p99": []}
     for lag in IMPULSE_LAGS:
         imp = impulse(ball, fps, lag)
         free = np.isfinite(imp) & seen & (dist > FREE_FLIGHT_M)
+        near = np.isfinite(imp) & seen & (dist <= NEAR_PLAYER_M)
         out["impulse_p90"].append(float(np.percentile(imp[free], 90)))
+        out["near_impulse_p99"].append(float(np.percentile(imp[near], 99)))
     return out
 
 

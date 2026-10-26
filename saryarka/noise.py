@@ -12,6 +12,8 @@ on a quarter of dead-ball frames. So both sides are rebuilt:
     while it is retrieved and placed -- switching on and off with BAR-ATH's dead-ball run lengths
   * Smart Tagging: each restart type is missed at the rate BAR-ATH's tag counts imply against
     Metrica's event counts, and ~10% false tags are added at random live moments
+  * ball blur: BAR-ATH's ball reaches real pass speeds but never shows a sharp kick, as if an
+    offline tracker filter smoothed it (centred, no delay), so the true ball is blurred that way first
   * ball position: a smooth wandering error (a critically damped spring kicked by random noise)
     so the ball sits as far from the players and wobbles as much in free flight as BAR-ATH's,
     where Metrica's is glued to the player on the ball
@@ -38,7 +40,8 @@ BAR_ATH_TAGS = {"throw-in": 26, "corner kick": 12, "goal kick": 10, "free kick":
 METRICA_EVENTS = {"throw-in": 30.0, "corner kick": 9.0, "goal kick": 18.5, "free kick": 31.0, "kick off (after goal)": 4.5}
 FALSE_TAG_SHARE = 6 / 57  # BAR-ATH restart tags that showed no restart at all
 TAG_LENGTH_S = 35.0
-WOBBLE_DRIFT_M = 1.0     # ball position error, std per axis (m); fitted by fit_wobble.py
+BLUR_S = 0.3             # tracker-like blur of the true ball (s), centred; fitted by fit_wobble.py
+WOBBLE_DRIFT_M = 0.75    # ball position error, std per axis (m); fitted by fit_wobble.py
 WOBBLE_RATE = 4.0        # how fast the error wanders (rad/s, critically damped spring)
 WOBBLE_SMOOTH_S = 0.2    # time constant of two passes of exponential smoothing on the error
 GOAL_TAG_JITTER_S = 10.0  # GOALS tags start within about this of the goal on BAR-ATH (player speeds)
@@ -116,6 +119,30 @@ def smooth_twice(x, fps, seconds):
     return x
 
 
+BLUR_CENTRED = True      # True: forward then backward pass (offline smoothing, no delay)
+
+
+def blur(ball_xy, fps, seconds, centred=None):
+    """Two-pass exponential smoothing that restarts after every gap (NaN) in the track.
+
+    Causal (two forward passes, delays the ball) or centred (forward then backward, no delay).
+    """
+    if seconds <= 0:
+        return ball_xy
+    centred = BLUR_CENTRED if centred is None else centred
+    alpha = 1 - np.exp(-1.0 / (seconds * fps))
+    x = ball_xy.copy()
+    for direction in ((1, -1) if centred else (1, 1)):
+        acc = None
+        for i in (range(len(x)) if direction == 1 else range(len(x) - 1, -1, -1)):
+            if np.isnan(x[i, 0]):
+                acc = None
+                continue
+            acc = x[i].copy() if acc is None else acc + alpha * (x[i] - acc)
+            x[i] = acc
+    return x
+
+
 def wobble(rng, n, fps, drift=WOBBLE_DRIFT_M, rate=WOBBLE_RATE, smooth_s=WOBBLE_SMOOTH_S):
     """(n, 2) smooth position error: o'' = -rate^2 o - 2 rate o' + noise, stationary std `drift`,
     then smoothed over `smooth_s` (which shrinks the std a little; the fit absorbs that)."""
@@ -131,7 +158,7 @@ def wobble(rng, n, fps, drift=WOBBLE_DRIFT_M, rate=WOBBLE_RATE, smooth_s=WOBBLE_
 
 
 def noisy_match(match, labels, restarts, seed, stats=None, drift=WOBBLE_DRIFT_M, rate=WOBBLE_RATE,
-                smooth_s=WOBBLE_SMOOTH_S):
+                smooth_s=WOBBLE_SMOOTH_S, blur_s=BLUR_S):
     """A copy of `match` with BAR-ATH-like ball dropout, dead-ball ball and Smart Tagging."""
     stats = stats or noise_stats.load()
     rng = rng_for(match.name, seed)
@@ -181,6 +208,7 @@ def noisy_match(match, labels, restarts, seed, stats=None, drift=WOBBLE_DRIFT_M,
     tags = noisy_tags(rng, restarts, labels, match.fps)
     goal_tags = [(min(end - 1, max(0, start + int(round(rng.uniform(-1, 1) * GOAL_TAG_JITTER_S * match.fps)))), end)
                  for start, end in match.goal_tags]  # drawn last, so the locked noise above is unchanged
+    ball[:, :2] = blur(ball[:, :2], match.fps, blur_s)  # after the ball is placed, before it wobbles
     if drift > 0:  # its own stream, so every other draw above is unchanged by it
         ball[:, :2] += wobble(rng_for(match.name + "/wobble", seed), len(ball), match.fps,
                                  drift, rate, smooth_s)

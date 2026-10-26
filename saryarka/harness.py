@@ -21,7 +21,8 @@ passes on all three games, but 25 and 125 are a near tie (match 3 favours 125, m
 where the real match has 125 ahead by 0.025. Choices between nearby windows need a margin.
 Noise settings are locked as of this commit. 26 Oct: ball-position wobble added (noise.py, fitted by
 fit_wobble.py to BAR-ATH summaries); calibration still passes and 125 now leads 25 by 0.018 (real
-0.025), baseline_smooth50 0.232 (real 0.243). Not modelled: BAR-ATH's ball is far from every player
+0.025), baseline_smooth50 0.232 (real 0.243). Then a centred 0.3 s ball blur, so kicks near players
+look like BAR-ATH's: 125 leads 25 by 0.031, baseline_smooth50 0.220. Not modelled: BAR-ATH's ball is far from every player
 more often (75-90th percentile distance), and drifts more over a full second.
 """
 

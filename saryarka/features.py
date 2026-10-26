@@ -5,9 +5,11 @@ Time windows are in seconds, so a 10 fps source (SkillCorner) builds the same si
 one. Where the ball is missing, distance signals use its last seen spot and `ball_age_s` says how
 stale that is.
 
-Team length (front-to-back spread) failed the transfer check and is left out: BAR-ATH tracks 9 or
-fewer players of a team on ~10% of live frames and more than 11 (ghost tracks) on 4-8%, which a
-spread measure magnifies. Metrica always has 11. Player-tracking noise is not in the harness yet.
+Team length (front-to-back spread) is measured on outfield players only: the keeper (each team's
+deepest player in that frame) dominates any spread, and BAR-ATH tracks 9 or fewer players of a team
+on ~10% of live frames and more than 11 (ghost tracks) on 4-8%. With the keeper in, length failed
+the transfer check; without, the spread gap passes (and points to the team on the ball 72% of the
+time vs 64%), and per team the middle-50% range is used because it shrugs off one stray track.
 
 Which goal each team attacks is inferred from where the teams stand over the surrounding minutes
 (DIRECTION_WINDOW_S), so it flips at half-time on any source without needing period metadata.
@@ -119,12 +121,19 @@ def build(match, codes, touch_list, dead_spans, vote_share):
     f["ball_x_forward"] = (ball[:, 0] - length / 2) * sign / (length / 2)
     f["ball_y_abs"] = np.abs(ball[:, 1] - width / 2) / (width / 2)
 
+    spread = {}
     with np.errstate(all="ignore"):
         for name, mask, team_sign in (("home", is_home, 1.0), ("away", ~is_home, -1.0)):
             team = players[:, mask]
             forward = sign * team_sign  # +1 = towards this team's attacking goal
             f["{}_centre_forward".format(name)] = (np.nanmean(team[:, :, 0], axis=1) - length / 2) * forward / (length / 2)
             f["{}_width".format(name)] = np.nanstd(team[:, :, 1], axis=1)
+            depth = np.sort(np.where(np.isnan(team[:, :, 0]), np.inf, (team[:, :, 0] - length / 2) * forward[:, None]),
+                            axis=1)
+            outfield = np.where(np.isfinite(depth), depth, np.nan)[:, 1:]  # drop the deepest: the keeper
+            spread[name] = np.nanstd(outfield, axis=1)
+            f["{}_length".format(name)] = (np.nanpercentile(outfield, 75, axis=1)
+                                           - np.nanpercentile(outfield, 25, axis=1))
             team_v = velocity(team, fps)
             f["{}_push".format(name)] = np.nanmean(team_v[:, :, 0], axis=1) * forward
             # closing speed of the PRESSERS nearest players: minus d(distance)/dt
@@ -135,6 +144,7 @@ def build(match, codes, touch_list, dead_spans, vote_share):
     f["push_gap"] = f["home_push"] - f["away_push"]
     f["press_gap"] = f["home_press"] - f["away_press"]
     f["width_gap"] = f["home_width"] - f["away_width"]
+    f["length_gap"] = spread["home"] - spread["away"]
     f["vote_share"] = vote_share
 
     for seconds in SMOOTH_S:

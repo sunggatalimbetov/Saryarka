@@ -18,9 +18,10 @@ the majority vote: short real possessions could not pay for their two switches.
 Frames with no ball seen within the window stay X as in quick win 1, and the dead spans stay D.
 Window 50 and SWITCH_COST 3 were picked leave-one-match-out on the external matches (tune_v4.py).
 
-    .venv/bin/python saryarka/viterbi.py     # writes evaluation/results/saryarka_v{4,5}_smooth*.csv
+    .venv/bin/python saryarka/viterbi.py     # writes evaluation/results/saryarka_v{4,5,6}_smooth*.csv
 
-v5 adds the GOALS-tag dead spans (set_pieces.goal_spans) to the cuts.
+v5 adds the GOALS-tag dead spans (set_pieces.goal_spans) to the cuts. v6 blends in the team that
+touched the ball last (touches.py), weight and costs from tune_v6.py.
 """
 
 import numpy as np
@@ -61,10 +62,16 @@ def decode(share, switch_cost):
     return out
 
 
-def labels(codes, window, switch_cost, dead_spans):
-    """H/A from the decoder over the +/- window vote, X where the window sees no ball, D on `dead_spans` [(start, stop)]."""
+def labels(codes, window, switch_cost, dead_spans, touch=None, touch_weight=0.0):
+    """H/A from the decoder over the +/- window vote, X where the window sees no ball, D on `dead_spans` [(start, stop)].
+
+    v6: `touch` (+1 / -1 / 0 per frame, the team that touched last) is blended into the evidence
+    with `touch_weight`.
+    """
     out = np.full(len(codes), "X", dtype="<U1")
     share = vote_share(codes, window)
+    if touch is not None and touch_weight > 0:
+        share = (1 - touch_weight) * share + touch_weight * touch
     cuts = sorted(dead_spans)
     pieces, cursor = [], 0
     for start, stop in cuts:
@@ -94,7 +101,7 @@ if __name__ == "__main__":
 
     match = core.bar_ath_match()
     codes = core.nearest_team(match)
-    for version in ("v4", "v5"):
+    for version in ("v4", "v5", "v6"):
         for window in (50, 125):
             name = "saryarka_{}_smooth{}".format(version, window)
             path = core.write_submission(os.path.join(core.RESULTS_DIR, name + ".csv"),

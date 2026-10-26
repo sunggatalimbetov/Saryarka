@@ -26,12 +26,16 @@ from games import GAME, GAMES, require  # noqa: E402
 from kickoff_d import second_half_dead_span  # noqa: E402
 from set_pieces import goal_spans, restart_spans, smart_tagging_goals, smart_tagging_restarts  # noqa: E402
 import tracking  # noqa: E402
+import touches  # noqa: E402
 import viterbi  # noqa: E402
 
 # Params
-VERSIONS = ("baseline", "v1", "v2", "v3", "v4", "v5")
+VERSIONS = ("baseline", "v1", "v2", "v3", "v4", "v5", "v6")
 REFERENCE_FPS = 25  # smoothing windows are quoted in frames at 25 fps, as in starter/baseline.py
 SWITCH_COST = 3.0   # v4: price of a change of team, in frames of unanimous vote; tune_v4.py
+TOUCH_WEIGHT = 0.25    # v6: share of the evidence from the team that touched last; tune_v6.py
+TOUCH_IMPULSE = 3.0    # v6: m/s velocity change counted as a touch (touches.py, half-second lag)
+V6_SWITCH_COST = 5.0   # v6: touches make the vote twitchier, so a change of team costs more
 
 
 @dataclass
@@ -79,15 +83,22 @@ def dead_spans(match, goals=False):
     return spans
 
 
-def predict(match, version, window, codes=None, switch_cost=SWITCH_COST):
+def predict(match, version, window, codes=None, switch_cost=None, touch_weight=TOUCH_WEIGHT,
+            min_impulse=TOUCH_IMPULSE):
     """Labels for one version: baseline, v1 (+X), v2 (+kickoff D), v3 (+restart D), v4 (+switch cost),
-    v5 (+goal D)."""
+    v5 (+goal D), v6 (+last touch)."""
     if codes is None:
         codes = nearest_team(match)
+    if switch_cost is None:
+        switch_cost = V6_SWITCH_COST if version == "v6" else SWITCH_COST
     frames = int(round(window * match.fps / REFERENCE_FPS))
-    if version in ("v4", "v5"):
-        return viterbi.labels(codes, frames, switch_cost * match.fps / REFERENCE_FPS,
-                              dead_spans(match, goals=version == "v5"))
+    if version in ("v4", "v5", "v6"):
+        spans = dead_spans(match, goals=version != "v4")
+        touch = None
+        if version == "v6":
+            touch = touches.last_touch(touches.detect(match, min_impulse), len(codes), spans)
+        return viterbi.labels(codes, frames, switch_cost * match.fps / REFERENCE_FPS, spans, touch,
+                              touch_weight if version == "v6" else 0.0)
     labels = smooth(codes, frames)
     if version == "baseline":
         return labels

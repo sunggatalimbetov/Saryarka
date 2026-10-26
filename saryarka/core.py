@@ -11,7 +11,7 @@ import argparse
 import filecmp
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -24,12 +24,12 @@ from baseline import (NOBODY, RESULTS_DIR, smooth, team_of_each_track,  # noqa: 
                       write_submission)
 from games import GAME, GAMES, require  # noqa: E402
 from kickoff_d import second_half_dead_span  # noqa: E402
-from set_pieces import restart_spans, smart_tagging_restarts  # noqa: E402
+from set_pieces import goal_spans, restart_spans, smart_tagging_goals, smart_tagging_restarts  # noqa: E402
 import tracking  # noqa: E402
 import viterbi  # noqa: E402
 
 # Params
-VERSIONS = ("baseline", "v1", "v2", "v3", "v4")
+VERSIONS = ("baseline", "v1", "v2", "v3", "v4", "v5")
 REFERENCE_FPS = 25  # smoothing windows are quoted in frames at 25 fps, as in starter/baseline.py
 SWITCH_COST = 3.0   # v4: price of a change of team, in frames of unanimous vote; tune_v4.py
 
@@ -44,13 +44,14 @@ class Match:
     kickoff_span: tuple         # (start, stop) graded dead span before a kickoff, or None
     fps: int
     pitch: tuple
+    goal_tags: list = field(default_factory=list)  # [(start, end)] GOALS tags: goal to kickoff
 
 
 def bar_ath_match(game=GAME):
     meta_path, = require(["atd_meta"], game)
     return Match(game, tracking.players(game), team_of_each_track(meta_path), tracking.ball(game),
                  smart_tagging_restarts(game), second_half_dead_span(game), GAMES[game]["fps"],
-                 GAMES[game]["pitch"])
+                 GAMES[game]["pitch"], smart_tagging_goals(game))
 
 
 def nearest_team(match):
@@ -69,19 +70,24 @@ def nearest_team(match):
     return out
 
 
-def dead_spans(match):
-    """[(start, stop)] spans v2-v4 paint D: the kickoff gap and the tagged restarts."""
+def dead_spans(match, goals=False):
+    """[(start, stop)] spans v2-v5 paint D: the kickoff gap, the tagged restarts, and (v5) goals."""
     spans = [match.kickoff_span] if match.kickoff_span else []
-    return spans + restart_spans(match.ball, match.restart_tags, match.fps, match.pitch)[0]
+    spans += restart_spans(match.ball, match.restart_tags, match.fps, match.pitch)[0]
+    if goals:
+        spans += goal_spans(match.ball, match.goal_tags, match.fps, match.pitch)
+    return spans
 
 
 def predict(match, version, window, codes=None, switch_cost=SWITCH_COST):
-    """Labels for one version: baseline, v1 (+X), v2 (+kickoff D), v3 (+restart D), v4 (+switch cost)."""
+    """Labels for one version: baseline, v1 (+X), v2 (+kickoff D), v3 (+restart D), v4 (+switch cost),
+    v5 (+goal D)."""
     if codes is None:
         codes = nearest_team(match)
     frames = int(round(window * match.fps / REFERENCE_FPS))
-    if version == "v4":
-        return viterbi.labels(codes, frames, switch_cost * match.fps / REFERENCE_FPS, dead_spans(match))
+    if version in ("v4", "v5"):
+        return viterbi.labels(codes, frames, switch_cost * match.fps / REFERENCE_FPS,
+                              dead_spans(match, goals=version == "v5"))
     labels = smooth(codes, frames)
     if version == "baseline":
         return labels

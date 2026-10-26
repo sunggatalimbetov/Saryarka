@@ -12,6 +12,8 @@ on a quarter of dead-ball frames. So both sides are rebuilt:
     while it is retrieved and placed -- switching on and off with BAR-ATH's dead-ball run lengths
   * Smart Tagging: each restart type is missed at the rate BAR-ATH's tag counts imply against
     Metrica's event counts, and ~10% false tags are added at random live moments
+  * GOALS tags: never missed (4 for 4 kickoffs after a goal on BAR-ATH), each start moved by up
+    to GOAL_TAG_JITTER_S either way -- an assumption, BAR-ATH has no answers to measure it on
 
 Everything is seeded by (match, seed), so a run repeats exactly.
 """
@@ -33,6 +35,7 @@ BAR_ATH_TAGS = {"throw-in": 26, "corner kick": 12, "goal kick": 10, "free kick":
 METRICA_EVENTS = {"throw-in": 30.0, "corner kick": 9.0, "goal kick": 18.5, "free kick": 31.0, "kick off (after goal)": 4.5}
 FALSE_TAG_SHARE = 6 / 57  # BAR-ATH restart tags that showed no restart at all
 TAG_LENGTH_S = 35.0
+GOAL_TAG_JITTER_S = 10.0  # GOALS tags start within about this of the goal on BAR-ATH (player speeds)
 
 
 def miss_rates():
@@ -139,4 +142,7 @@ def noisy_match(match, labels, restarts, seed, stats=None):
         frames = np.arange(start, stop)[seen]
         ball[frames, 0], ball[frames, 1], ball[frames, 2] = spot[0], spot[1], np.nan
 
-    return replace(match, ball=ball, restart_tags=noisy_tags(rng, restarts, labels, match.fps)), scale
+    tags = noisy_tags(rng, restarts, labels, match.fps)
+    goal_tags = [(min(end - 1, max(0, start + int(round(rng.uniform(-1, 1) * GOAL_TAG_JITTER_S * match.fps)))), end)
+                 for start, end in match.goal_tags]  # drawn last, so the locked noise above is unchanged
+    return replace(match, ball=ball, restart_tags=tags, goal_tags=goal_tags), scale

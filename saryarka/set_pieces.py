@@ -35,6 +35,7 @@ MAX_SEARCH_S = 12      # restart must show within this long after the tag starts
 SPEED_LAG = 5          # frames over which ball speed is measured (0.2 s)
 MIN_SPEED = 3.0        # m/s: a struck or thrown ball, not one rolling on the spot
 PITCH_MARGIN = 1.0     # m: the ball on the line still counts as in
+GOAL_RESTART_LEAD_S = 5  # s before a GOALS tag ends to start looking for the kickoff
 WINDOWS = (50, 125)
 
 
@@ -66,6 +67,26 @@ def restart_spans(ball, tags, fps, pitch):
             continue
         spans.append((start, restart))
     return spans, skipped
+
+
+def goal_spans(ball, goal_tags, fps, pitch):
+    """[(start, stop)] dead spans for GOALS tags [(start, end)]: from the goal to the kickoff.
+
+    On BAR-ATH a GOALS tag starts at the goal (within ~15 s, from player speeds) and ends ~1 s
+    after the next kickoff tag starts, so the restart is searched from GOAL_RESTART_LEAD_S before
+    the tag ends; without one the span stops at the tag end.
+    """
+    spans = []
+    for start, end in goal_tags:
+        restart = restart_frame(ball, max(start, end - int(GOAL_RESTART_LEAD_S * fps)), fps, pitch)
+        spans.append((start, restart if restart is not None else end))
+    return spans
+
+
+def smart_tagging_goals(game=GAME):
+    """[(start, end)] for every GOALS phase in the game's Smart Tagging."""
+    return [(event["start_frame"], event["end_frame"]) for event in load_smart_tagging.load(game)
+            if event["code"].strip().upper() == "GOALS"]
 
 
 def smart_tagging_restarts(game=GAME):

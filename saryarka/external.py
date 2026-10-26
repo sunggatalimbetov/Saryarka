@@ -183,7 +183,10 @@ def read_tracking(game):
 
 
 def labels_from_events(events, period, n_frames):
-    """Per-frame H/A/D/X answers and the true restarts [(frame, type, x, y)], per the rules above."""
+    """Per-frame H/A/D/X answers and the true restarts [(frame, type, x, y)], per the rules above.
+
+    Goals are in the list too, as type 'goal' at the frame the ball died.
+    """
     labels = np.full(n_frames, "X", dtype="<U1")
     restarts = []
     by_period = {}
@@ -226,7 +229,7 @@ def labels_from_events(events, period, n_frames):
                     goal_pending = True
         labels[cursor:stop] = "D" if state == "D" or owner is None else "HA"[owner]
         labels[stop:frames[-1] + 1] = "X"
-    return labels, [restart for restart in restarts if restart[1] != "goal"]
+    return labels, restarts
 
 
 def perfect_tags(restarts, fps=FPS):
@@ -243,6 +246,17 @@ def perfect_tags(restarts, fps=FPS):
     return tags
 
 
+def perfect_goal_tags(restarts, fps=FPS):
+    """GOALS-like tags: from the goal to 1 s after the next kickoff tag starts, as on BAR-ATH."""
+    kickoffs = [tag[0] for tag in perfect_tags([r for r in restarts if r[1] == AFTER_GOAL_KICKOFF], fps)]
+    tags = []
+    for frame, kind, _, _ in restarts:
+        later = [k for k in kickoffs if k > frame]
+        if kind == "goal" and later:
+            tags.append((frame, later[0] + fps))
+    return tags
+
+
 def metrica_match(game):
     """(Match with perfect tags, answers, true restarts) for a Metrica sample game."""
     if game in EPTS_GAMES:
@@ -251,9 +265,10 @@ def metrica_match(game):
     else:
         period, players, team_of_slot, ball = read_tracking(game)
         events = read_events(game)
-    labels, restarts = labels_from_events(events, period, len(period))
+    labels, events_restarts = labels_from_events(events, period, len(period))
+    restarts = [r for r in events_restarts if r[1] != "goal"]
     match = Match("metrica{}".format(game), players, team_of_slot, ball, perfect_tags(restarts),
-                  None, FPS, PITCH)
+                  None, FPS, PITCH, perfect_goal_tags(events_restarts))
     return match, labels, restarts
 
 

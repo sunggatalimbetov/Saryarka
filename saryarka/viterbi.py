@@ -18,7 +18,9 @@ the majority vote: short real possessions could not pay for their two switches.
 Frames with no ball seen within the window stay X as in quick win 1, and the dead spans stay D.
 Window 50 and SWITCH_COST 3 were picked leave-one-match-out on the external matches (tune_v4.py).
 
-    .venv/bin/python saryarka/viterbi.py     # writes evaluation/results/saryarka_v4_smooth*.csv
+    .venv/bin/python saryarka/viterbi.py     # writes evaluation/results/saryarka_v{4,5}_smooth*.csv
+
+v5 adds the GOALS-tag dead spans (set_pieces.goal_spans) to the cuts.
 """
 
 import numpy as np
@@ -92,8 +94,9 @@ if __name__ == "__main__":
 
     match = core.bar_ath_match()
     codes = core.nearest_team(match)
-    for window in (50, 125):
-        name = "saryarka_v4_smooth{}".format(window)
-        path = core.write_submission(os.path.join(core.RESULTS_DIR, name + ".csv"),
-                                     core.predict(match, "v4", window, codes))
-        print("{:<22} -> {}".format(name, os.path.relpath(path, core.ROOT)))
+    for version in ("v4", "v5"):
+        for window in (50, 125):
+            name = "saryarka_{}_smooth{}".format(version, window)
+            path = core.write_submission(os.path.join(core.RESULTS_DIR, name + ".csv"),
+                                         core.predict(match, version, window, codes))
+            print("{:<22} -> {}".format(name, os.path.relpath(path, core.ROOT)))

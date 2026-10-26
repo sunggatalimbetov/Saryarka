@@ -26,10 +26,12 @@ from games import GAME, GAMES, require  # noqa: E402
 from kickoff_d import second_half_dead_span  # noqa: E402
 from set_pieces import restart_spans, smart_tagging_restarts  # noqa: E402
 import tracking  # noqa: E402
+import viterbi  # noqa: E402
 
 # Params
-VERSIONS = ("baseline", "v1", "v2", "v3")
+VERSIONS = ("baseline", "v1", "v2", "v3", "v4")
 REFERENCE_FPS = 25  # smoothing windows are quoted in frames at 25 fps, as in starter/baseline.py
+SWITCH_COST = 3.0   # v4: price of a change of team, in frames of unanimous vote; tune_v4.py
 
 
 @dataclass
@@ -67,11 +69,20 @@ def nearest_team(match):
     return out
 
 
-def predict(match, version, window, codes=None):
-    """Labels for one version: baseline, v1 (+X), v2 (+kickoff D), v3 (+restart D)."""
+def dead_spans(match):
+    """[(start, stop)] spans v2-v4 paint D: the kickoff gap and the tagged restarts."""
+    spans = [match.kickoff_span] if match.kickoff_span else []
+    return spans + restart_spans(match.ball, match.restart_tags, match.fps, match.pitch)[0]
+
+
+def predict(match, version, window, codes=None, switch_cost=SWITCH_COST):
+    """Labels for one version: baseline, v1 (+X), v2 (+kickoff D), v3 (+restart D), v4 (+switch cost)."""
     if codes is None:
         codes = nearest_team(match)
-    labels = smooth(codes, int(round(window * match.fps / REFERENCE_FPS)))
+    frames = int(round(window * match.fps / REFERENCE_FPS))
+    if version == "v4":
+        return viterbi.labels(codes, frames, switch_cost * match.fps / REFERENCE_FPS, dead_spans(match))
+    labels = smooth(codes, frames)
     if version == "baseline":
         return labels
     labels[labels == "D"] = "X"

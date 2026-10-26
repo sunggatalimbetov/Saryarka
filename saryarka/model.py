@@ -26,7 +26,11 @@ sys.path.insert(0, HERE)
 
 # Params
 STRIDE = 5            # use every 5th live frame for training: neighbours are near copies
-C = 1.0               # inverse regularisation strength
+C = 1.0               # inverse regularisation strength (logistic)
+KIND = "logistic"     # model kind used by train() unless told otherwise
+# Gradient boosting (v8): a few hundred small trees, each fixing the previous ones' mistakes.
+BOOSTING = {"max_iter": 300, "learning_rate": 0.1, "max_leaf_nodes": 31, "min_samples_leaf": 200,
+            "l2_regularization": 1.0, "early_stopping": False}
 # Signals that change sign when home and away swap; home_* <-> away_* are swapped; the rest keep.
 SIGN_FLIP = ("near_gap", "count2_gap", "count5_gap", "touch_last", "ball_v_forward", "ball_x_forward",
              "push_gap", "press_gap", "width_gap", "length_gap", "vote_share", "phase_team")
@@ -56,23 +60,35 @@ def matrix(f, names):
     return np.column_stack([f[name] for name in names])
 
 
-def train(feature_sets, label_sets, stride=STRIDE):
+def training_rows(f, labels, names, stride=STRIDE):
+    """(X, y) for one match: every stride-th live frame, seen as is and with the teams swapped."""
+    frames = np.flatnonzero(np.isin(labels, ["H", "A"]))[::stride]
+    home = (labels[frames] == "H").astype(int)
+    return (np.vstack([matrix(f, names)[frames], matrix(mirror(f), names)[frames]]),
+            np.concatenate([home, 1 - home]))
+
+
+def fit(X, y, kind=KIND):
+    """A fitted classifier of the given kind: 'logistic' (v7) or 'boosting' (v8)."""
+    if kind == "boosting":
+        from sklearn.ensemble import HistGradientBoostingClassifier
+        model = HistGradientBoostingClassifier(**BOOSTING, random_state=0)  # handles NaN itself
+    else:
+        from sklearn.impute import SimpleImputer
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.pipeline import make_pipeline
+        from sklearn.preprocessing import StandardScaler
+        model = make_pipeline(SimpleImputer(strategy="median"), StandardScaler(),
+                              LogisticRegression(C=C, max_iter=2000))
+    model.fit(X, y)
+    return model
+
+
+def train(feature_sets, label_sets, stride=STRIDE, kind=KIND):
     """Fit on [(features dict, labels array)] from external matches; returns (model, names)."""
-    from sklearn.impute import SimpleImputer
-    from sklearn.linear_model import LogisticRegression
-    from sklearn.pipeline import make_pipeline
-    from sklearn.preprocessing import StandardScaler
     names = sorted(feature_sets[0])
-    rows, targets = [], []
-    for f, labels in zip(feature_sets, label_sets):
-        frames = np.flatnonzero(np.isin(labels, ["H", "A"]))[::stride]
-        home = (labels[frames] == "H").astype(int)
-        rows += [matrix(f, names)[frames], matrix(mirror(f), names)[frames]]
-        targets += [home, 1 - home]
-    model = make_pipeline(SimpleImputer(strategy="median"), StandardScaler(),
-                          LogisticRegression(C=C, max_iter=2000))
-    model.fit(np.vstack(rows), np.concatenate(targets))
-    return model, names
+    parts = [training_rows(f, labels, names, stride) for f, labels in zip(feature_sets, label_sets)]
+    return fit(np.vstack([X for X, _ in parts]), np.concatenate([y for _, y in parts]), kind), names
 
 
 def home_probability(model, names, f):

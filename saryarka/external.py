@@ -68,10 +68,19 @@ def read_events(game):
     path = os.path.join(METRICA, "Sample_Game_{0}".format(game), "Sample_Game_{0}_RawEventsData.csv".format(game))
     with open(path) as handle:
         rows = list(csv.DictReader(handle))
-    return [{"team": HOME if row["Team"] == "Home" else AWAY, "type": row["Type"],
+    events = [{"team": HOME if row["Team"] == "Home" else AWAY, "type": row["Type"],
              "subtype": row["Subtype"] or "", "period": int(row["Period"]),
-             "start": int(row["Start Frame"]) - 1, "end": int(row["End Frame"]) - 1}  # 0-based
-            for row in rows]
+             "start": int(row["Start Frame"]) - 1, "end": int(row["End Frame"]) - 1,  # 0-based
+             "x": float(row["Start X"]) * PITCH[0], "y": float(row["Start Y"]) * PITCH[1]}
+              for row in rows]
+    # A SET PIECE row carries no location; the pass that takes it, logged next, does.
+    for index, event in enumerate(events):
+        if np.isnan(event["x"]):
+            later = next((e for e in events[index + 1:index + 4]
+                          if e["start"] >= event["start"] and not np.isnan(e["x"])), None)
+            if later:
+                event["x"], event["y"] = later["x"], later["y"]
+    return events
 
 
 def read_tracking(game):
@@ -99,7 +108,7 @@ def read_tracking(game):
 
 
 def labels_from_events(events, period, n_frames):
-    """Per-frame H/A/D/X answers and the true restarts [(frame, type)], per the rules above."""
+    """Per-frame H/A/D/X answers and the true restarts [(frame, type, x, y)], per the rules above."""
     labels = np.full(n_frames, "X", dtype="<U1")
     restarts = []
     by_period = {}
@@ -119,7 +128,7 @@ def labels_from_events(events, period, n_frames):
             if restart:
                 if restart == "kick off" and restarts and restarts[-1][1] == "goal":
                     restart = AFTER_GOAL_KICKOFF
-                restarts.append((event["start"], restart, None))
+                restarts.append((event["start"], restart, event["x"], event["y"]))
             # Any on-ball event revives a dead ball, logged restart or not: play has visibly resumed.
             if kind in ON_BALL and (state == "D" or event["team"] != owner):
                 labels[cursor:event["start"]] = "D" if state == "D" else "HA"[owner]
@@ -131,10 +140,10 @@ def labels_from_events(events, period, n_frames):
                 labels[cursor:frame] = "HA"[owner]
                 state, cursor = "D", frame
                 if kind in ("SHOT", "BALL OUT") and "GOAL" in subtype.split("-"):
-                    restarts.append((frame, "goal", None))
+                    restarts.append((frame, "goal", np.nan, np.nan))
         labels[cursor:stop] = "D" if state == "D" or owner is None else "HA"[owner]
         labels[stop:frames[-1] + 1] = "X"
-    return labels, [(frame, kind) for frame, kind, _ in restarts if kind != "goal"]
+    return labels, [restart for restart in restarts if restart[1] != "goal"]
 
 
 def perfect_tags(restarts, fps=FPS):
@@ -144,7 +153,7 @@ def perfect_tags(restarts, fps=FPS):
     after a kickoff tag starts. Those two summary numbers place the fake tags.
     """
     tags = []
-    for frame, kind in restarts:
+    for frame, kind, _, _ in restarts:
         lead, length = (3.4, 5.0) if kind.startswith("kick off") else (5.4, 35.0)
         start = max(0, frame - int(round(lead * fps)))
         tags.append((start, start + int(round(length * fps)), kind))
@@ -166,7 +175,7 @@ def summary(name, labels, restarts, fps=FPS):
     runs = np.split(labels, edges)
     spells = [r for r in runs if r[0] in "HA"]
     kinds = {}
-    for _, kind in restarts:
+    for _, kind, _, _ in restarts:
         kinds[kind] = kinds.get(kind, 0) + 1
     return ("{}: graded {:.1f} min, D {:.1f}%, H share of alive {:.1f}%, {} possessions, mean {:.1f} s\n"
             "    restarts {}".format(

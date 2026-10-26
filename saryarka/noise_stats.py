@@ -36,7 +36,10 @@ def run_lengths(mask):
 
 
 def ball_features(ball, players):
-    """Per frame: players within CROWD_RADIUS of the ball (capped) and ball speed bin, -1 if no ball."""
+    """Per frame: players within CROWD_RADIUS of the ball (capped) and ball step, metres per frame.
+
+    Without a ball both read as zero, i.e. the uncrowded, slow cell.
+    """
     dx = players[:, :, 0] - ball[:, None, 0]
     dy = players[:, :, 1] - ball[:, None, 1]
     with np.errstate(invalid="ignore"):

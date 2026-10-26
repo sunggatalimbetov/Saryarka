@@ -126,11 +126,13 @@ def report(rows, versions, windows):
             "PASS" if ours == PUBLISHED_ORDER else "FAIL"))
         print("             noisy baseline_smooth50 mean {:.3f} (real full match 0.243, informative only)".format(means[50]))
 
-    print("\nverdicts (noisy, mean up AND wins on >= 2/3 of matches):")
+    print("\nverdicts (noisy, mean up AND wins on >= 2/3 of matches), each version vs the one before it:")
     for window in windows:
-        chain = [v for v in versions]
-        for a, b in zip(chain[1:], chain[:-1]):
-            print("  w{:<4} {:<8} vs {:<8}: {}".format(window, a, b, "better" if better(rows, matches, (a, window), (b, window)) else "not better"))
+        for a, b in zip(versions[1:], versions[:-1]):
+            same = all(noisy_mean(rows, m, a, window) == noisy_mean(rows, m, b, window) for m in matches)
+            verdict = "untested (identical output here)" if same else (
+                "better" if better(rows, matches, (a, window), (b, window)) else "not better")
+            print("  w{:<4} {:<8} vs {:<8}: {}".format(window, a, b, verdict))
 
 
 if __name__ == "__main__":
@@ -140,5 +142,7 @@ if __name__ == "__main__":
     parser.add_argument("--windows", type=int, nargs="+", default=list(WINDOWS))
     parser.add_argument("--seeds", type=int, default=5)
     args = parser.parse_args()
+    if args.seeds < 1:
+        parser.error("--seeds must be at least 1: the verdicts are on the noisy runs")
     rows = run(args.games, args.versions, args.windows, args.seeds)
     report(rows, args.versions, args.windows)

@@ -106,15 +106,21 @@ def noisy_match(match, labels, restarts, seed, stats=None):
     already = np.isnan(ball[:, 0])
 
     # Solve the hazard scale so the live missing share lands on BAR-ATH's, one rng stream per try.
-    low, high = 0.0, 50.0
+    # The share is only roughly monotone in the scale (run lengths share the rng), so the try
+    # closest to the target is kept rather than the last midpoint.
+    low, high, best = 0.0, 50.0, None
     for _ in range(25):
         scale = (low + high) / 2
         trial = live_dropout(rng_for(match.name + "/scale", seed), live, crowd, sbin,
                              stats["hazard"], stats["missing_run_quantiles"], scale)
         share = np.mean((trial | already)[live])
+        if best is None or abs(share - target) < abs(best[1] - target):
+            best = (scale, share, trial)
         low, high = (scale, high) if share < target else (low, scale)
-    drop = live_dropout(rng_for(match.name + "/scale", seed), live, crowd, sbin,
-                        stats["hazard"], stats["missing_run_quantiles"], scale)
+    scale, share, drop = best
+    if abs(share - target) > 0.02:
+        raise ValueError("{} seed {}: live missing share {:.3f} cannot reach {:.3f}".format(
+            match.name, seed, share, target))
     ball[drop] = np.nan
 
     # Dead ball: the ball sits at the restart spot, seen on and off. BAR-ATH's dead runs are cut

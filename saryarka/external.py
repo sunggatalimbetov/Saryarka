@@ -63,7 +63,7 @@ def restart_kind(kind, subtype):
     """Smart-Tagging-style restart type for an event that restarts play, else None."""
     if kind == "SET PIECE":
         return SET_PIECE_TYPES.get(subtype.split("-")[0])  # game 3: FREE KICK-INDIRECT etc.
-    if kind in ("PASS", "BALL LOST") and subtype.startswith("GOAL KICK"):
+    if kind in ("PASS", "BALL LOST") and subtype.startswith("GOAL KICK") and "END HALF" not in subtype.split("-"):
         return "goal kick"
     return None
 
@@ -193,16 +193,19 @@ def labels_from_events(events, period, n_frames):
     for half, half_events in sorted(by_period.items()):
         frames = np.flatnonzero(period == half)
         first, stop = int(frames[0]), int(frames[-1]) + 1
-        end_half = [e["start"] for e in half_events if e["type"] == "BALL LOST" and e["subtype"] == "END HALF"]
+        end_half = [e["start"] for e in half_events
+                    if e["type"] == "BALL LOST" and "END HALF" in e["subtype"].split("-")]  # also FORCED-END HALF
         stop = min([stop] + [f + 1 for f in end_half])
 
         state, owner, cursor = "D", None, first  # every half starts dead, before its kickoff
+        goal_pending = False  # per half, so a goal ending one half never relabels the next kickoff
         for event in sorted(half_events, key=lambda e: e["start"]):
             kind, subtype = event["type"], event["subtype"]
             restart = restart_kind(kind, subtype)
             if restart:
-                if restart == "kick off" and restarts and restarts[-1][1] == "goal":
+                if restart == "kick off" and goal_pending:
                     restart = AFTER_GOAL_KICKOFF
+                goal_pending = False
                 restarts.append((event["start"], restart, event["x"], event["y"]))
             # Any on-ball event revives a dead ball, logged restart or not: play has visibly resumed.
             # One that began before the ball died (game 3 logs carries overlapping the ball-out)
@@ -220,6 +223,7 @@ def labels_from_events(events, period, n_frames):
                 state, cursor = "D", frame
                 if kind in ("SHOT", "BALL OUT") and "GOAL" in subtype.split("-"):
                     restarts.append((frame, "goal", np.nan, np.nan))
+                    goal_pending = True
         labels[cursor:stop] = "D" if state == "D" or owner is None else "HA"[owner]
         labels[stop:frames[-1] + 1] = "X"
     return labels, [restart for restart in restarts if restart[1] != "goal"]

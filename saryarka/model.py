@@ -13,7 +13,8 @@ spellF1 0.407 vs v6 0.355, wins 3/3. Without the phase tags 0.402, so the gain d
 the faked tags. Largest weights: vote share, team width gap, phase tags, ball moving forward,
 length gap, team push.
 
-    .venv/bin/python saryarka/model.py      # trains, writes evaluation/results/saryarka_v7_*.csv
+    .venv/bin/python saryarka/model.py                 # v8: trains, writes evaluation/results/saryarka_v8_*.csv
+    .venv/bin/python saryarka/model.py --version v7    # the logistic model, Metrica only
 """
 
 import os
@@ -68,8 +69,10 @@ def training_rows(f, labels, names, stride=STRIDE):
             np.concatenate([home, 1 - home]))
 
 
-def fit(X, y, kind=KIND):
-    """A fitted classifier of the given kind: 'logistic' (v7) or 'boosting' (v8)."""
+def fit(X, y, kind=KIND, sample_weight=None):
+    """A fitted classifier of the given kind: 'logistic' (v7) or 'boosting' (v8).
+
+    sample_weight lets each training source count the same in total, whatever its match count."""
     if kind == "boosting":
         from sklearn.ensemble import HistGradientBoostingClassifier
         model = HistGradientBoostingClassifier(**BOOSTING, random_state=0)  # handles NaN itself
@@ -80,7 +83,12 @@ def fit(X, y, kind=KIND):
         from sklearn.preprocessing import StandardScaler
         model = make_pipeline(SimpleImputer(strategy="median"), StandardScaler(),
                               LogisticRegression(C=C, max_iter=2000))
-    model.fit(X, y)
+    if sample_weight is None:
+        model.fit(X, y)
+    elif kind == "boosting":
+        model.fit(X, y, sample_weight=sample_weight)
+    else:
+        model.fit(X, y, logisticregression__sample_weight=sample_weight)
     return model
 
 
@@ -137,18 +145,45 @@ def train_on_external(seeds=TRAIN_SEEDS):
     return train(feature_sets, label_sets)
 
 
+# v8, picked by tune_v8.py (26 Oct): gradient boosting, Metrica and SkillCorner weighted equally,
+# trained on all 23 external matches. Held-out spellF1 with the sources counted equally 0.344
+# (unweighted boosting 0.332, logistic 0.319, v6 0.310); Metrica 0.386, SkillCorner 0.303.
+# Switch cost 3 picked on every held-out match (costs 1-3 within 0.004).
+V8_SWITCH_COST = 3.0
+
+
+def train_v8():
+    """v8's model: balanced boosting on every external match's cached training rows."""
+    import external
+    import tune_v8
+    games = external.all_games()
+    jobs = [(g, s) for g in games for s in tune_v8.TRAIN_SEEDS]
+    for job in jobs:
+        tune_v8.build(job)  # no-op when cached
+    parts = [np.load(tune_v8.cache_path(g, s)) for g, s in jobs]
+    sources = np.concatenate([np.full(len(p["y"]), g in external.GAMES) for (g, _), p in zip(jobs, parts)])
+    X = np.vstack([p["X"] for p in parts]).astype(float)
+    y = np.concatenate([p["y"] for p in parts])
+    return fit(X, y, "boosting", tune_v8.source_weights(sources)), list(parts[0]["names"])
+
+
 if __name__ == "__main__":
+    import argparse
     import warnings
     warnings.filterwarnings("ignore", category=RuntimeWarning)
     import core
     import features
 
-    fit, names = train_on_external()
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--version", choices=("v7", "v8"), default="v8")
+    version = parser.parse_args().version
+    fit_, names = train_v8() if version == "v8" else train_on_external()
+    cost = V8_SWITCH_COST if version == "v8" else SWITCH_COST
     match = core.bar_ath_match()
     codes = core.nearest_team(match)
-    probability = home_probability(fit, names, features.match_features(match, codes))
+    probability = home_probability(fit_, names, features.match_features(match, codes))
     for window in (WINDOW, 125):
-        name = "saryarka_v7_smooth{}".format(window)
+        name = "saryarka_{}_smooth{}".format(version, window)
         path = core.write_submission(os.path.join(core.RESULTS_DIR, name + ".csv"),
-                                     labels(match, codes, probability, window, SWITCH_COST))
+                                     labels(match, codes, probability, window, cost))
         print("{:<22} -> {}".format(name, os.path.relpath(path, core.ROOT)))

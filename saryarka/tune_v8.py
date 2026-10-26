@@ -33,6 +33,9 @@ TEST_SEEDS = (0, 1)
 WINDOW = 50
 SWITCH_COSTS = (1, 2, 3)
 KINDS = ("logistic", "boosting")
+# "balanced": boosting with Metrica's matches and SkillCorner's counting the same in total.
+# Mixed training let SkillCorner's 20 matches outvote Metrica's 3 (Metrica 0.415 alone, 0.358 mixed).
+ALL_KINDS = KINDS + ("balanced",)
 BUILD_WORKERS = 8
 FOLD_WORKERS = 4
 
@@ -64,7 +67,16 @@ def build(job):
     return path
 
 
-def fold(held):
+def source_weights(sources):
+    """Per-row weights so each source's rows sum to the same total."""
+    sources = np.asarray(sources)
+    weights = np.ones(len(sources))
+    for name in set(sources):
+        weights[sources == name] = len(sources) / (len(set(sources)) * np.sum(sources == name))
+    return weights
+
+
+def fold(held, kinds=KINDS):
     """Scores on one held-out game: {kind: {cost: spellF1}}, v6, and per-frame accuracies."""
     warnings.filterwarnings("ignore")
     import external
@@ -77,13 +89,16 @@ def fold(held):
     names = list(parts[0]["names"])
     X = np.vstack([p["X"] for p in parts]).astype(float)
     y = np.concatenate([p["y"] for p in parts])
-    fits = {kind: model.fit(X, y, kind) for kind in KINDS}
+    sources = np.concatenate([np.full(len(p["y"]), g in external.GAMES) for g, p in
+                              zip([g for g in others for _ in TRAIN_SEEDS], parts)])
+    fits = {kind: model.fit(X, y, "boosting", source_weights(sources)) if kind == "balanced"
+            else model.fit(X, y, kind) for kind in kinds}
 
     match, labels, restarts = external.load(held)
     gt = to_codes(labels)
     live = np.isin(labels, ["H", "A"])
-    out = {kind: {c: [] for c in SWITCH_COSTS} for kind in KINDS}
-    out["v6"], out["acc"] = [], {kind: [] for kind in KINDS + ("vote",)}
+    out = {kind: {c: [] for c in SWITCH_COSTS} for kind in kinds}
+    out["v6"], out["acc"] = [], {kind: [] for kind in kinds + ("vote",)}
     for seed in TEST_SEEDS:
         variant = noise.noisy_match(match, labels, restarts, seed)[0]
         codes = nearest_team(variant)
@@ -98,23 +113,24 @@ def fold(held):
                 out[kind][cost].append(score(gt, model.labels(variant, codes, p, WINDOW, cost))[0])
     print("  scored {}".format(match.name), file=sys.stderr, flush=True)
     return match.name, {
-        **{kind: {c: float(np.mean(v)) for c, v in out[kind].items()} for kind in KINDS},
+        **{kind: {c: float(np.mean(v)) for c, v in out[kind].items()} for kind in kinds},
         "v6": float(np.mean(out["v6"])),
         "acc": {k: float(np.mean(v)) for k, v in out["acc"].items()},
     }
 
 
-def saved_fold(held):
+def saved_fold(job):
     """fold(), with its result kept on disk so a stopped run resumes where it was."""
     import json
-    path = os.path.join(CACHE, "fold_{}.json".format(held))
+    held, kinds, tag = job
+    path = os.path.join(CACHE, "fold{}_{}.json".format(tag, held))
     if os.path.exists(path):
         with open(path) as handle:
             name, result = json.load(handle)
-        for kind in KINDS:  # JSON turned the switch-cost keys into strings
+        for kind in kinds:  # JSON turned the switch-cost keys into strings
             result[kind] = {float(c) if "." in c else int(c): v for c, v in result[kind].items()}
         return name, result
-    result = fold(held)
+    result = fold(held, kinds)
     with open(path, "w") as handle:
         json.dump(result, handle)
     return result
@@ -132,30 +148,38 @@ def main():
         with ctx.Pool(BUILD_WORKERS) as pool:
             list(pool.imap_unordered(build, jobs))
     results = {}
+    runs = [(g, KINDS, "") for g in games] + [(g, ("balanced",), "_balanced") for g in games]
     with ctx.Pool(FOLD_WORKERS) as pool:
-        for name, result in pool.imap_unordered(saved_fold, games):
-            results[name] = result
+        for name, result in pool.imap_unordered(saved_fold, runs):
+            acc = results.setdefault(name, {"acc": {}})
+            acc["acc"].update(result.pop("acc"))
+            acc.update(result)
 
     matches = sorted(results, key=lambda m: (source(m) != "metrica", m))
     print("\nper-frame right team on live frames (mean over matches):")
-    for k in KINDS + ("vote",):
+    for k in ALL_KINDS + ("vote",):
         print("  {:<9} {:.3f}".format(k, np.mean([results[m]["acc"][k] for m in matches])))
 
-    picked = {kind: lomo({m: results[m][kind] for m in matches}) for kind in KINDS}
+    picked = {kind: lomo({m: results[m][kind] for m in matches}) for kind in ALL_KINDS}
     print("\nheld-out spellF1 (switch cost picked leave-one-match-out), window {}:".format(WINDOW))
-    print("{:<20} {:>8} {:>9} {:>9}".format("match", "v6", "logistic", "boosting"))
+    print("{:<20} {:>8} {:>9} {:>9} {:>9}".format("match", "v6", *ALL_KINDS))
     for m in matches:
-        print("{:<20} {:>8.3f} {:>9.3f} {:>9.3f}".format(m, results[m]["v6"], *(picked[k][m][1] for k in KINDS)))
+        print("{:<20} {:>8.3f} {:>9.3f} {:>9.3f} {:>9.3f}".format(m, results[m]["v6"], *(picked[k][m][1] for k in ALL_KINDS)))
     groups = {}
     for m in matches:
         groups.setdefault(source(m), []).append(m)
-    for name, ms in [("all", matches)] + list(groups.items()):
-        v6 = np.mean([results[m]["v6"] for m in ms])
-        lg = [picked["logistic"][m][1] for m in ms]
-        bo = [picked["boosting"][m][1] for m in ms]
-        print("MEAN {:<12} v6 {:.3f}  logistic {:.3f}  boosting {:.3f}  | boosting beats logistic on {}/{}".format(
-            name, v6, np.mean(lg), np.mean(bo), sum(b > a for a, b in zip(lg, bo)), len(ms)))
-    for kind in KINDS:
+    print("\nmeans ('sources equal' = mean of the two source means, the deciding number):")
+    rows = {"v6": {m: results[m]["v6"] for m in matches}}
+    rows.update({k: {m: picked[k][m][1] for m in matches} for k in ALL_KINDS})
+    for k, by_match in rows.items():
+        per = {name: np.mean([by_match[m] for m in ms]) for name, ms in groups.items()}
+        print("  {:<9} sources equal {:.3f}  | ".format(k, np.mean(list(per.values())))
+              + "  ".join("{} {:.3f}".format(n, v) for n, v in per.items())
+              + "  | all {:.3f}".format(np.mean(list(by_match.values()))))
+    for a_, b_ in (("balanced", "boosting"), ("balanced", "logistic")):
+        wins = sum(rows[a_][m] > rows[b_][m] for m in matches)
+        print("  {} beats {} on {}/{} matches".format(a_, b_, wins, len(matches)))
+    for kind in ALL_KINDS:
         costs = [picked[kind][m][0] for m in matches]
         print("{} costs picked: {}".format(kind, {c: costs.count(c) for c in sorted(set(costs))}))
         print("  all-match means by cost: " + "  ".join("c{} {:.3f}".format(c, np.mean([results[m][kind][c] for m in matches]))

@@ -48,11 +48,28 @@ WOBBLE_RATE = 4.0        # how fast the error wanders (rad/s, critically damped 
 WOBBLE_SMOOTH_S = 0.2    # time constant of two passes of exponential smoothing on the error
 PHASE_SPILL = {"build": 0.104, "progression": 0.531, "chances": 1.0, "transition": 1.0}  # phases.py
 PHASE_FLIP = {"build": 0.0, "progression": 0.0, "chances": 0.265, "transition": 0.077}
+MAX_REDRAWS = 20        # fresh dropout streams tried when the live missing share cannot be hit
 GOAL_TAG_JITTER_S = 10.0  # GOALS tags start within about this of the goal on BAR-ATH (player speeds)
+# Per source: restart counts per match (miss rates are BAR-ATH's tags against these), the ball
+# blur and wobble, and whether the source's own dead-ball ball must be removed first. Metrica
+# already loses the ball when it is dead; SkillCorner's broadcast keeps it, which would hand any
+# model the answer. SkillCorner's blur and drift are fitted by fit_wobble.py --source skillcorner
+# (26 Oct, 10 of the 20 matches: blur 0.2 s, drift 0.75 m, error 0.149): its broadcast ball is
+# already a little smooth, so it needs less blur than Metrica's to look like BAR-ATH's.
+SKILLCORNER_EVENTS = {"throw-in": 40.8, "corner kick": 8.7, "goal kick": 15.2, "free kick": 22.0,
+                      "kick off (after goal)": 3.0}  # mean per match over the 20, skillcorner.py
+PROFILES = {
+    "metrica": {"events": METRICA_EVENTS, "blur_s": BLUR_S, "drift": WOBBLE_DRIFT_M, "blank_dead": False},
+    "skillcorner": {"events": SKILLCORNER_EVENTS, "blur_s": 0.2, "drift": 0.75, "blank_dead": True},
+}
 
 
-def miss_rates():
-    return {kind: float(np.clip(1 - BAR_ATH_TAGS[kind] / METRICA_EVENTS[kind], 0, 1)) for kind in BAR_ATH_TAGS}
+def profile(match):
+    return PROFILES["skillcorner" if match.name.startswith("skillcorner") else "metrica"]
+
+
+def miss_rates(events=METRICA_EVENTS):
+    return {kind: float(np.clip(1 - BAR_ATH_TAGS[kind] / events[kind], 0, 1)) for kind in BAR_ATH_TAGS}
 
 
 def rng_for(name, seed):
@@ -94,10 +111,10 @@ def onoff(rng, n, mean_on, mean_off, start_on):
     return out
 
 
-def noisy_tags(rng, restarts, labels, fps):
+def noisy_tags(rng, restarts, labels, fps, events=METRICA_EVENTS):
     """Smart-Tagging-like tags with per-type misses and false alarms."""
     from external import perfect_tags
-    rates = miss_rates()
+    rates = miss_rates(events)
     kept = [r for r in restarts if rng.random() >= rates.get(r[1], 0.0)]
     tags = perfect_tags(kept, fps)
     live_frames = np.flatnonzero(np.isin(labels, ["H", "A"]))
@@ -161,14 +178,21 @@ def wobble(rng, n, fps, drift=WOBBLE_DRIFT_M, rate=WOBBLE_RATE, smooth_s=WOBBLE_
     return smooth_twice(out, fps, smooth_s)
 
 
-def noisy_match(match, labels, restarts, seed, stats=None, drift=WOBBLE_DRIFT_M, rate=WOBBLE_RATE,
-                smooth_s=WOBBLE_SMOOTH_S, blur_s=BLUR_S):
-    """A copy of `match` with BAR-ATH-like ball dropout, dead-ball ball and Smart Tagging."""
+def noisy_match(match, labels, restarts, seed, stats=None, drift=None, rate=WOBBLE_RATE,
+                smooth_s=WOBBLE_SMOOTH_S, blur_s=None):
+    """A copy of `match` with BAR-ATH-like ball dropout, dead-ball ball and Smart Tagging.
+
+    drift and blur_s default to the match's source profile (PROFILES)."""
     stats = stats or noise_stats.load()
+    source = profile(match)
+    drift = source["drift"] if drift is None else drift
+    blur_s = source["blur_s"] if blur_s is None else blur_s
     rng = rng_for(match.name, seed)
     ball = match.ball.copy()
     live = np.isin(labels, ["H", "A"])
     dead = labels == "D"
+    if source["blank_dead"]:
+        ball[dead] = np.nan
 
     crowd, step = noise_stats.ball_features(ball, match.players_xy)
     sbin = noise_stats.speed_bin(step, match.fps)
@@ -177,16 +201,23 @@ def noisy_match(match, labels, restarts, seed, stats=None, drift=WOBBLE_DRIFT_M,
 
     # Solve the hazard scale so the live missing share lands on BAR-ATH's, one rng stream per try.
     # The share is only roughly monotone in the scale (run lengths share the rng), so the try
-    # closest to the target is kept rather than the last midpoint.
-    low, high, best = 0.0, 50.0, None
-    for _ in range(25):
-        scale = (low + high) / 2
-        trial = live_dropout(rng_for(match.name + "/scale", seed), live, crowd, sbin,
-                             stats["hazard"], stats["missing_run_quantiles"], scale)
-        share = np.mean((trial | already)[live])
-        if best is None or abs(share - target) < abs(best[1] - target):
-            best = (scale, share, trial)
-        low, high = (scale, high) if share < target else (low, scale)
+    # closest to the target is kept rather than the last midpoint. BAR-ATH's longest missing runs
+    # (minutes) can make the share jump past the target; then the dropout is redrawn from a fresh
+    # stream. Only reached when the first stream fails, so matches it served keep their noise.
+    for attempt in range(MAX_REDRAWS + 1):
+        stream = rng_for(match.name + "/scale" + ("/{}".format(attempt) if attempt else ""), seed)
+        state = stream.bit_generator.state
+        low, high, best = 0.0, 50.0, None
+        for _ in range(25):
+            scale = (low + high) / 2
+            stream.bit_generator.state = state
+            trial = live_dropout(stream, live, crowd, sbin, stats["hazard"], stats["missing_run_quantiles"], scale)
+            share = np.mean((trial | already)[live])
+            if best is None or abs(share - target) < abs(best[1] - target):
+                best = (scale, share, trial)
+            low, high = (scale, high) if share < target else (low, scale)
+        if abs(best[1] - target) <= 0.02:
+            break
     scale, share, drop = best
     if abs(share - target) > 0.02:
         raise ValueError("{} seed {}: live missing share {:.3f} cannot reach {:.3f}".format(
@@ -209,7 +240,7 @@ def noisy_match(match, labels, restarts, seed, stats=None, drift=WOBBLE_DRIFT_M,
         frames = np.arange(start, stop)[seen]
         ball[frames, 0], ball[frames, 1], ball[frames, 2] = spot[0], spot[1], np.nan
 
-    tags = noisy_tags(rng, restarts, labels, match.fps)
+    tags = noisy_tags(rng, restarts, labels, match.fps, source["events"])
     goal_tags = [(min(end - 1, max(0, start + int(round(rng.uniform(-1, 1) * GOAL_TAG_JITTER_S * match.fps)))), end)
                  for start, end in match.goal_tags]  # drawn last, so the locked noise above is unchanged
     ball[:, :2] = blur(ball[:, :2], match.fps, blur_s)  # after the ball is placed, before it wobbles

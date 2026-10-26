@@ -272,6 +272,20 @@ def metrica_match(game):
     return match, labels, restarts
 
 
+def load(game):
+    """(Match, answers, true restarts) for any external game: Metrica 1-3 or a SkillCorner match id."""
+    if game in GAMES:
+        return metrica_match(game)
+    import skillcorner
+    return skillcorner.skillcorner_match(game)
+
+
+def all_games():
+    """Every external game: Metrica's three, then SkillCorner's matches if they are downloaded."""
+    import skillcorner
+    return list(GAMES) + list(skillcorner.GAMES)
+
+
 def summary(name, labels, restarts, fps=FPS):
     graded = labels != "X"
     edges = np.flatnonzero(labels[1:] != labels[:-1]) + 1

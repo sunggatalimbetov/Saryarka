@@ -24,6 +24,7 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import phases  # noqa: E402
 import touches  # noqa: E402
 
 # Params
@@ -146,6 +147,7 @@ def build(match, codes, touch_list, dead_spans, vote_share):
     f["width_gap"] = f["home_width"] - f["away_width"]
     f["length_gap"] = spread["home"] - spread["away"]
     f["vote_share"] = vote_share
+    f["phase_team"] = phases.signal(match.phase_tags, n)  # Smart Tagging phases (faked on the harness)
 
     for seconds in SMOOTH_S:
         half = int(round(seconds * fps))

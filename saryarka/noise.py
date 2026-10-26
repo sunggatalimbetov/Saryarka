@@ -17,6 +17,8 @@ on a quarter of dead-ball frames. So both sides are rebuilt:
   * ball position: a smooth wandering error (a critically damped spring kicked by random noise)
     so the ball sits as far from the players and wobbles as much in free flight as BAR-ATH's,
     where Metrica's is glued to the player on the ball
+  * phases of play: Smart-Tagging-like phase tags placed by the true possession, with spill and
+    wrong-team rates calibrated in phases.py
   * GOALS tags: never missed (4 for 4 kickoffs after a goal on BAR-ATH), each start moved by up
     to GOAL_TAG_JITTER_S either way -- an assumption, BAR-ATH has no answers to measure it on
 
@@ -44,6 +46,8 @@ BLUR_S = 0.3             # tracker-like blur of the true ball (s), centred; fitt
 WOBBLE_DRIFT_M = 0.75    # ball position error, std per axis (m); fitted by fit_wobble.py
 WOBBLE_RATE = 4.0        # how fast the error wanders (rad/s, critically damped spring)
 WOBBLE_SMOOTH_S = 0.2    # time constant of two passes of exponential smoothing on the error
+PHASE_SPILL = {"build": 0.104, "progression": 0.531, "chances": 1.0, "transition": 1.0}  # phases.py
+PHASE_FLIP = {"build": 0.0, "progression": 0.0, "chances": 0.265, "transition": 0.077}
 GOAL_TAG_JITTER_S = 10.0  # GOALS tags start within about this of the goal on BAR-ATH (player speeds)
 
 
@@ -212,4 +216,6 @@ def noisy_match(match, labels, restarts, seed, stats=None, drift=WOBBLE_DRIFT_M,
     if drift > 0:  # its own stream, so every other draw above is unchanged by it
         ball[:, :2] += wobble(rng_for(match.name + "/wobble", seed), len(ball), match.fps,
                                  drift, rate, smooth_s)
-    return replace(match, ball=ball, restart_tags=tags, goal_tags=goal_tags), scale
+    import phases  # own stream, so nothing above changes
+    phase_tags = phases.fake(match, labels, rng_for(match.name + "/phases", seed), PHASE_FLIP, PHASE_SPILL)
+    return replace(match, ball=ball, restart_tags=tags, goal_tags=goal_tags, phase_tags=phase_tags), scale

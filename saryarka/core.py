@@ -26,6 +26,7 @@ from games import GAME, GAMES, require  # noqa: E402
 from kickoff_d import second_half_dead_span  # noqa: E402
 from set_pieces import goal_spans, restart_spans, smart_tagging_goals, smart_tagging_restarts  # noqa: E402
 import tracking  # noqa: E402
+import phases  # noqa: E402
 import touches  # noqa: E402
 import viterbi  # noqa: E402
 
@@ -49,13 +50,14 @@ class Match:
     fps: int
     pitch: tuple
     goal_tags: list = field(default_factory=list)  # [(start, end)] GOALS tags: goal to kickoff
+    phase_tags: list = field(default_factory=list)  # [(start, end, family, team)] phases of play
 
 
 def bar_ath_match(game=GAME):
     meta_path, = require(["atd_meta"], game)
     return Match(game, tracking.players(game), team_of_each_track(meta_path), tracking.ball(game),
                  smart_tagging_restarts(game), second_half_dead_span(game), GAMES[game]["fps"],
-                 GAMES[game]["pitch"], smart_tagging_goals(game))
+                 GAMES[game]["pitch"], smart_tagging_goals(game), phases.smart_tagging_phases(game))
 
 
 def nearest_team(match):

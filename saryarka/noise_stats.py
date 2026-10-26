@@ -27,6 +27,9 @@ CROWD_BINS = (0, 1, 2, 3)         # players within the radius: 0, 1, 2, 3+
 SPEED_EDGES = (2.0, 8.0, 15.0)    # m/s: still/dribbled, passed, driven, struck
 SPEED_LAG = 5                     # frames
 N_QUANTILES = 101
+DIST_QUANTILES = (10, 25, 50, 75, 90)  # ball to nearest player, m
+IMPULSE_LAGS = (1, 3, 6, 12)            # frames each side for |v_out - v_in|
+FREE_FLIGHT_M = 5.0                     # impulse measured where no player is this close
 
 
 def run_lengths(mask):
@@ -67,6 +70,48 @@ def hazard_table(present, crowd, sbin, live):
             counts[c, s] = pick.sum()
             table[c, s] = nxt[pick].mean() if pick.any() else 0.0
     return table, counts
+
+
+def position_summary(ball, players, team_of_slot, fps, live):
+    """How far the ball sits from players and how much it wobbles in free flight, on live frames.
+
+    Same numbers for any match, so the noise model can be fitted to make Metrica's look like ours.
+    """
+    from touches import impulse, nearest
+    dist, _ = nearest(ball, players, team_of_slot)
+    seen = np.isfinite(dist) & live
+    out = {"dist_quantiles": np.percentile(dist[seen], DIST_QUANTILES).tolist(), "impulse_p90": []}
+    for lag in IMPULSE_LAGS:
+        imp = impulse(ball, fps, lag)
+        free = np.isfinite(imp) & seen & (dist > FREE_FLIGHT_M)
+        out["impulse_p90"].append(float(np.percentile(imp[free], 90)))
+    return out
+
+
+def live_mask(game=GAME):
+    from set_pieces import dead_spans
+    from kickoff_d import second_half_dead_span
+    import tracking
+    n = len(tracking.ball(game))
+    graded = np.zeros(n, bool)
+    for _, first, last in half_video_blocks(game):
+        graded[first:last + 1] = True
+    for start, stop in dead_spans(game)[0] + [second_half_dead_span(game)]:
+        graded[start:stop] = False
+    return graded
+
+
+def position_stats(game=GAME):
+    """BAR-ATH's position_summary, cached under data/ like load()."""
+    path = os.path.join(ROOT, "data", "{}_ball_position_stats.json".format(game))
+    if not os.path.exists(path):
+        from core import bar_ath_match
+        match = bar_ath_match(game)
+        stats = position_summary(match.ball, match.players_xy, match.team_of_slot, match.fps, live_mask(game))
+        with open(path, "w") as handle:
+            json.dump(stats, handle, indent=1)
+    with open(path) as handle:
+        return json.load(handle)
 
 
 def compute(game=GAME):

@@ -12,6 +12,9 @@ on a quarter of dead-ball frames. So both sides are rebuilt:
     while it is retrieved and placed -- switching on and off with BAR-ATH's dead-ball run lengths
   * Smart Tagging: each restart type is missed at the rate BAR-ATH's tag counts imply against
     Metrica's event counts, and ~10% false tags are added at random live moments
+  * ball position: a smooth wandering error (a critically damped spring kicked by random noise)
+    so the ball sits as far from the players and wobbles as much in free flight as BAR-ATH's,
+    where Metrica's is glued to the player on the ball
   * GOALS tags: never missed (4 for 4 kickoffs after a goal on BAR-ATH), each start moved by up
     to GOAL_TAG_JITTER_S either way -- an assumption, BAR-ATH has no answers to measure it on
 
@@ -35,6 +38,9 @@ BAR_ATH_TAGS = {"throw-in": 26, "corner kick": 12, "goal kick": 10, "free kick":
 METRICA_EVENTS = {"throw-in": 30.0, "corner kick": 9.0, "goal kick": 18.5, "free kick": 31.0, "kick off (after goal)": 4.5}
 FALSE_TAG_SHARE = 6 / 57  # BAR-ATH restart tags that showed no restart at all
 TAG_LENGTH_S = 35.0
+WOBBLE_DRIFT_M = 1.0     # ball position error, std per axis (m); fitted by fit_wobble.py
+WOBBLE_RATE = 4.0        # how fast the error wanders (rad/s, critically damped spring)
+WOBBLE_SMOOTH_S = 0.2    # time constant of two passes of exponential smoothing on the error
 GOAL_TAG_JITTER_S = 10.0  # GOALS tags start within about this of the goal on BAR-ATH (player speeds)
 
 
@@ -95,7 +101,37 @@ def noisy_tags(rng, restarts, labels, fps):
     return sorted(tags)
 
 
-def noisy_match(match, labels, restarts, seed, stats=None):
+def smooth_twice(x, fps, seconds):
+    """Two forward passes of an exponential moving average: strips the quick shake, keeps drift."""
+    if seconds <= 0:
+        return x
+    alpha = 1 - np.exp(-1.0 / (seconds * fps))
+    for _ in range(2):
+        out = np.empty_like(x)
+        acc = x[0]
+        for i in range(len(x)):
+            acc = acc + alpha * (x[i] - acc)
+            out[i] = acc
+        x = out
+    return x
+
+
+def wobble(rng, n, fps, drift=WOBBLE_DRIFT_M, rate=WOBBLE_RATE, smooth_s=WOBBLE_SMOOTH_S):
+    """(n, 2) smooth position error: o'' = -rate^2 o - 2 rate o' + noise, stationary std `drift`,
+    then smoothed over `smooth_s` (which shrinks the std a little; the fit absorbs that)."""
+    dt = 1.0 / fps
+    kick = drift * np.sqrt(4 * rate ** 3 * dt) * rng.standard_normal((n, 2))
+    out = np.empty((n, 2))
+    o, v = drift * rng.standard_normal(2), drift * rate * rng.standard_normal(2)
+    for i in range(n):
+        v = v + dt * (-rate * rate * o - 2 * rate * v) + kick[i]
+        o = o + dt * v
+        out[i] = o
+    return smooth_twice(out, fps, smooth_s)
+
+
+def noisy_match(match, labels, restarts, seed, stats=None, drift=WOBBLE_DRIFT_M, rate=WOBBLE_RATE,
+                smooth_s=WOBBLE_SMOOTH_S):
     """A copy of `match` with BAR-ATH-like ball dropout, dead-ball ball and Smart Tagging."""
     stats = stats or noise_stats.load()
     rng = rng_for(match.name, seed)
@@ -145,4 +181,7 @@ def noisy_match(match, labels, restarts, seed, stats=None):
     tags = noisy_tags(rng, restarts, labels, match.fps)
     goal_tags = [(min(end - 1, max(0, start + int(round(rng.uniform(-1, 1) * GOAL_TAG_JITTER_S * match.fps)))), end)
                  for start, end in match.goal_tags]  # drawn last, so the locked noise above is unchanged
+    if drift > 0:  # its own stream, so every other draw above is unchanged by it
+        ball[:, :2] += wobble(rng_for(match.name + "/wobble", seed), len(ball), match.fps,
+                                 drift, rate, smooth_s)
     return replace(match, ball=ball, restart_tags=tags, goal_tags=goal_tags), scale

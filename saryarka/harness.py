@@ -19,7 +19,10 @@ Known bias (accepted 26 Oct): Metrica's event-based possessions are shorter (10-
 organisers' (14 s on the public slice), so the harness leans toward shorter windows. Calibration
 passes on all three games, but 25 and 125 are a near tie (match 3 favours 125, matches 1-2 favour 25)
 where the real match has 125 ahead by 0.025. Choices between nearby windows need a margin.
-Noise settings are locked as of this commit.
+Noise settings are locked as of this commit. 26 Oct: ball-position wobble added (noise.py, fitted by
+fit_wobble.py to BAR-ATH summaries); calibration still passes and 125 now leads 25 by 0.018 (real
+0.025), baseline_smooth50 0.232 (real 0.243). Not modelled: BAR-ATH's ball is far from every player
+more often (75-90th percentile distance), and drifts more over a full second.
 """
 
 import argparse

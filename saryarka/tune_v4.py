@@ -23,8 +23,8 @@ import noise  # noqa: E402
 import noise_stats  # noqa: E402
 
 # Params
-WINDOWS = (15, 25, 50, 75, 100, 125)
-SWITCH_COSTS = (0.5, 1, 2, 3, 5, 8, 12, 20)
+WINDOWS = (25, 50, 75)
+SWITCH_COSTS = (1, 2, 3, 5, 8, 12)
 V3_WINDOWS = (25, 50, 125)
 
 

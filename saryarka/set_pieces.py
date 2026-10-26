@@ -54,19 +54,33 @@ def restart_frame(ball, start, fps, pitch):
     return None
 
 
-def dead_spans(game=GAME):
-    """[(start, stop)] dead-ball spans before each tagged restart, plus a one-line summary."""
-    fps, pitch = GAMES[game]["fps"], GAMES[game]["pitch"]
-    ball = tracking.ball(game)
+def restart_spans(ball, tags, fps, pitch):
+    """[(start, stop)] dead spans for restart tags [(start, end, type)], and how many were skipped."""
     spans, skipped = [], 0
-    for event in load_smart_tagging.load(game):
-        if (event["tags"].get("Type") or "").strip().lower() not in RESTART_TYPES:
+    for start, _, kind in tags:
+        if kind not in RESTART_TYPES:
             continue
-        restart = restart_frame(ball, event["start_frame"], fps, pitch)
+        restart = restart_frame(ball, start, fps, pitch)
         if restart is None:
             skipped += 1
             continue
-        spans.append((event["start_frame"], restart))
+        spans.append((start, restart))
+    return spans, skipped
+
+
+def smart_tagging_restarts(game=GAME):
+    """[(start, end, type)] for every tagged restart in the game's Smart Tagging, type lower case."""
+    return [(event["start_frame"], event["end_frame"],
+             (event["tags"].get("Type") or "").strip().lower())
+            for event in load_smart_tagging.load(game)
+            if (event["tags"].get("Type") or "").strip().lower() in RESTART_TYPES]
+
+
+def dead_spans(game=GAME):
+    """[(start, stop)] dead-ball spans before each tagged restart, plus a one-line summary."""
+    fps = GAMES[game]["fps"]
+    spans, skipped = restart_spans(tracking.ball(game), smart_tagging_restarts(game), fps,
+                                   GAMES[game]["pitch"])
     lengths = [(stop - start) / fps for start, stop in spans]
     summary = "{} restart spans, {} tags skipped, dead span median {:.1f} s (max {:.1f} s)".format(
         len(spans), skipped, np.median(lengths), max(lengths))

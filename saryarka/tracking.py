@@ -28,3 +28,34 @@ def ball(game=GAME):
             out[int(parts[0]) - 1] = (x * length, y * width, speed)  # frame_id counts from 1
     np.save(cache, out)
     return out
+
+
+def players(game=GAME):
+    """(n_frames, n_slots, 2) player x, y in metres, NaN where a slot is not tracked.
+
+    float64 and scaled exactly as starter/baseline.py scales them, so nearest-player distances
+    computed from this array match the baseline's bit for bit.
+    """
+    raw_path, = require(["atd_raw"], game)
+    cache = os.path.join(os.path.dirname(raw_path), "{}_players_cache.npy".format(game))
+    if os.path.exists(cache):
+        return np.load(cache)
+
+    length, width = GAMES[game]["pitch"]
+    out = None
+    with open(raw_path) as handle:
+        for line in handle:
+            parts = line.split(":")
+            if len(parts) != 3:
+                continue
+            groups = parts[1].split(";")
+            if out is None:
+                out = np.full((source_frames("tactical", game), len(groups), 2), np.nan)
+            frame = int(parts[0]) - 1
+            for slot, group in enumerate(groups):
+                if group[0] == "N":
+                    continue
+                x, y = group.split(",")[:2]
+                out[frame, slot] = (float(x) * length, float(y) * width)
+    np.save(cache, out)
+    return out

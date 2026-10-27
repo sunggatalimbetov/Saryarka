@@ -168,10 +168,14 @@ def train_v8():
     return fit(X, y, "boosting", tune_v8.source_weights(sources)), list(parts[0]["names"])
 
 
-# v9, picked by tune_v9.py (27 Oct): v8 + the learned dead-ball probability (deadball.py), tagged
-# spans backdated (stage A) and untagged stoppages added (stage B). Held-out spellF1 over the 23
-# external matches 0.424 vs v8 0.314, wins 23/23 (Metrica 0.486, SkillCorner 0.414).
-V9_DEAD = {"t_low": 0.3, "t_high": 0.6, "min_dead_s": 2.0}
+# v9, from tune_v9.py (27 Oct): v8 + the learned dead-ball probability (deadball.py), tagged spans
+# backdated (stage A) and untagged stoppages added (stage B). Leave-one-match-out picked
+# 0.3/0.6/2 (held-out 0.424 vs v8 0.314, wins 23/23), but on BAR-ATH that adds 72-76 untagged
+# stoppages, over the limit of 60 fixed beforehand (with dead share 25-45%). The setting used is
+# the leave-one-out grid's least aggressive one that keeps BAR-ATH inside both limits, judged on
+# summary counts of our own output only (no answers): 0.3/0.8/3, harness 0.418, wins 23/23;
+# BAR-ATH 60 new stoppages, 42.6% dead.
+V9_DEAD = {"t_low": 0.3, "t_high": 0.8, "min_dead_s": 3.0}
 
 
 def train_dead():

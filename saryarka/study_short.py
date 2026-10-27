@@ -8,6 +8,7 @@ For every truth spell shorter than SHORT_S that v10 matches at no IoU >= 0.3, it
     .venv/bin/python saryarka/study_short.py            # the diagnostic, read-only
     .venv/bin/python saryarka/study_short.py evidence   # S1: reshaped evidence x switch cost vs v10
     .venv/bin/python saryarka/study_short.py model      # S2: tune_v11.py's sharper P(home) vs v10
+    .venv/bin/python saryarka/study_short.py train-short-only   # S2b: short weighting on v10's signals, ~40 min
 
 S1 reshapes the evidence the decoder sums, so that confident frames count for more than unsure ones
 and a short possession the model is sure of can pay for its two switches, while frames near 0.5
@@ -125,6 +126,41 @@ def evidence_study(pool, games):
         ", ".join("{} {:+.3f}".format(k, v) for k, v in drops.items()), "BETTER" if ok else "no clear change"))
 
 
+def short_only_path(game, seed):
+    import tune_v11
+    return os.path.join(tune_v11.CACHE, "oof11s_{}_{}.npz".format(game, seed))
+
+
+def short_only_fold(held):
+    """tune_v11.fold's "short" model trained on v10's signals only (tune_v11.EXTRA left out).
+    Lives here, not in tune_v11.py, so the cache fingerprint (and its caches) stay as they are."""
+    import warnings
+    warnings.filterwarnings("ignore")
+    import external
+    import model
+    import tune_v11
+    if all(os.path.exists(short_only_path(held, s)) for s in TEST_SEEDS):
+        return held
+    others = [g for g in external.all_games() if g != held]
+    jobs = [(g, s) for g in others for s in tune_v11.TRAIN_SEEDS]
+    parts = [np.load(tune_v11.cache_path(g, s)) for g, s in jobs]
+    all_names = list(parts[0]["names"])
+    keep = [i for i, n in enumerate(all_names) if n not in tune_v11.EXTRA]
+    names = [all_names[i] for i in keep]
+    X = np.vstack([p["X"][:, keep] for p in parts]).astype(float)
+    y = np.concatenate([p["y"] for p in parts])
+    short = np.concatenate([p["short"] for p in parts])
+    sources = np.concatenate([np.full(len(p["y"]), g in external.GAMES) for (g, _), p in zip(jobs, parts)])
+    weights = tune_v11.source_weights(sources) * np.where(short, tune_v11.SHORT_WEIGHT, 1.0)
+    fitted = model.fit(X, y, "boosting", weights)
+    for seed in TEST_SEEDS:
+        F = np.load(tune_v11.cache_path(held, seed))["F"].astype(float)
+        f = {n: F[:, all_names.index(n)] for n in names}
+        np.savez(short_only_path(held, seed), short_only=model.home_probability(fitted, names, f).astype(np.float32))
+    print("  oof short_only {}".format(held), file=sys.stderr, flush=True)
+    return held
+
+
 MODEL_COSTS = (3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0)
 
 
@@ -141,8 +177,9 @@ def model_case(job):
     truth_home = c["labels"][live] == "H"
     out = {"v10": (sd.spell_f1(c["gt"], base),) + short_found(c, base) + (np.mean((c["p_home"][live] > 0.5) == truth_home),)}
     z = dict(np.load(tune_v11.oof_path(game, seed)))
+    z.update(np.load(short_only_path(game, seed)))
     z["old"] = c["p_home"]  # v10's own P(home): separates a new switch cost from new probabilities
-    for name in ("old",) + tune_v11.MODELS:
+    for name in ("old",) + tune_v11.MODELS + ("short_only",):
         c["p_home"] = z[name].astype(float)
         acc = np.mean((c["p_home"][live] > 0.5) == truth_home)
         for cost in MODEL_COSTS:
@@ -164,7 +201,7 @@ def model_study(pool, games):
     for k in full[ms[0]]:
         v = np.mean([full[m][k] for m in ms], axis=0)
         print("  {:<10} spellF1 {:.3f}  short found {:.0f}/match, short phantoms {:.0f}/match, per-frame team {:.1%}".format(k, *v))
-    for name in ("old",) + __import__("tune_v11").MODELS:
+    for name in ("old",) + __import__("tune_v11").MODELS + ("short_only",):
         table = {m: {k: v[0] for k, v in full[m].items() if k.startswith(name + "/")} for m in ms}
         picked = lomo(table)
         held = {m: picked[m][1] for m in ms}
@@ -220,6 +257,11 @@ def main():
     import external
     from harness import source
     games = external.all_games()
+    if sys.argv[1:] == ["train-short-only"]:
+        os.environ["OMP_NUM_THREADS"] = "2"
+        with multiprocessing.get_context("spawn").Pool(4) as pool:
+            list(pool.imap_unordered(short_only_fold, games))
+        return
     studies = {"evidence": evidence_study, "model": model_study}
     if sys.argv[1:2] and sys.argv[1] in studies:
         with multiprocessing.get_context("spawn").Pool(sd.WORKERS) as pool:

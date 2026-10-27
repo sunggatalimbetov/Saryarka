@@ -40,6 +40,9 @@ SHORT_S = 5.0                # short possession / short phantom
 MATCH_IOU = 0.3              # lowest IoU the metric credits
 BUCKETS_S = (2.0, 5.0, 10.0)
 NO_X_WINDOW = 10 ** 6
+# Baseline for every study after A2 (27 Oct): v9 + A2, no forced X, switch cost 4 (A2's pick).
+BASE_WINDOW = NO_X_WINDOW
+BASE_COST = 4.0
 
 
 def case(game, seed):
@@ -63,7 +66,7 @@ def v9_dead(c, **overrides):
     return deadball.spans(c["match"], c["p_dead"], **{**model.V9_DEAD, **overrides})
 
 
-def v9_labels(c, dead=None, window=WINDOW, switch_cost=SWITCH_COST):
+def v9_labels(c, dead=None, window=BASE_WINDOW, switch_cost=BASE_COST):
     import deadball
     return deadball.labels(c["match"], c["codes"], c["p_home"], v9_dead(c) if dead is None else dead,
                            window, switch_cost)
@@ -109,7 +112,7 @@ def breakdown_case(job):
     c = case(game, seed)
     gt, labels, fps = c["gt"], c["labels"], c["match"].fps
     runs = pm.valid_runs(gt)
-    out = v9_labels(c)
+    out = v9_labels(c, window=WINDOW, switch_cost=SWITCH_COST)
     base = spell_f1(gt, out)
     filled = pm.fill_abstentions(to_codes(out), runs)
     gt_spells = pm.possession_spells(gt, runs)
@@ -119,7 +122,7 @@ def breakdown_case(job):
 
     # 1. true dead ball: the decoder cut and painted at the answers' D runs instead of ours
     true_dead = runs_of(labels == "D")
-    r["oracle_dead"] = spell_f1(gt, v9_labels(c, dead=true_dead))
+    r["oracle_dead"] = spell_f1(gt, v9_labels(c, true_dead, WINDOW, SWITCH_COST))
 
     # 2. true switch timing: every predicted boundary within SNAP_S of its matched truth spell's
     #    boundary is moved onto it (spells matched by best same-team IoU)
@@ -239,7 +242,7 @@ def family_a2(c):
 # those get a prior. The harness's fake tags get the team that really restarts, flipped at
 # TAG_TEAM_FLIP (set from BAR-ATH before any harness result, study_bar_ath.py --tag-teams), and a
 # random team on false tags.
-TAG_TEAM_FLIP = None
+TAG_TEAM_FLIP = 0.12  # BAR-ATH: tag Team = v9's first team after the restart on 88% of 24 (27 Oct)
 TAG_MATCH_S = 15.0
 TEAM_TAGGED = ("corner kick", "free kick", "goal kick")
 PRIOR_SECONDS = (2.0, 4.0, 6.0)
@@ -276,7 +279,7 @@ def tag_teams(c, flip):
     return out
 
 
-def prior_labels(c, dead, teams, seconds, weight, switch_cost=SWITCH_COST):
+def prior_labels(c, dead, teams, seconds, weight, switch_cost=BASE_COST):
     import core
     import viterbi
     m = c["match"]
@@ -284,7 +287,7 @@ def prior_labels(c, dead, teams, seconds, weight, switch_cost=SWITCH_COST):
     for r, team in teams:
         k = int(round(seconds * m.fps))
         touch[r:r + k] = np.clip(touch[r:r + k] + (weight if team == 0 else -weight), -1, 1)
-    frames = int(round(WINDOW * m.fps / core.REFERENCE_FPS))
+    frames = int(round(BASE_WINDOW * m.fps / core.REFERENCE_FPS))
     return viterbi.labels(c["codes"], frames, switch_cost * m.fps / core.REFERENCE_FPS, dead,
                           touch=touch, touch_weight=1.0)
 
@@ -325,7 +328,7 @@ def decode3(cost_h, cost_a, cost_d, switch, dead_in):
     return out
 
 
-def three_state_labels(c, beta, dead_in, switch_cost=SWITCH_COST, window=WINDOW):
+def three_state_labels(c, beta, dead_in, switch_cost=BASE_COST, window=BASE_WINDOW):
     import core
     m = c["match"]
     scale = m.fps / core.REFERENCE_FPS
@@ -382,12 +385,12 @@ def grid(pool, games, family):
     ms = sorted(table, key=lambda m: (source(m) != "metrica", m))
     picked = lomo(table)
     held = {m: picked[m][1] for m in ms}
-    print("{}: settings picked leave-one-match-out; v9 = w{}/c{:g}".format(family, WINDOW, SWITCH_COST))
+    print("{}: settings picked leave-one-match-out; baseline = v9 + A2 (no X, cost {:g})".format(family, BASE_COST))
     print("  mean by setting (all 23, in-sample): " + ", ".join(
         "{} {:.3f}".format(k, np.mean([table[m][k] for m in ms])) for k in table[ms[0]]))
     print("  picks: {}".format(sorted({picked[m][0] for m in ms})))
     ok, wins, drops = verdict(held, base, ms)
-    print("  held-out all {:.3f} vs v9 {:.3f} | wins {}/{} | {} -> {}".format(
+    print("  held-out all {:.3f} vs base {:.3f} | wins {}/{} | {} -> {}".format(
         np.mean(list(held.values())), np.mean(list(base.values())), wins, len(ms),
         ", ".join("{} {:+.3f}".format(k, v) for k, v in drops.items()),
         "BETTER" if ok else "no clear change"))

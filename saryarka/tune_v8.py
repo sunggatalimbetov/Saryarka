@@ -29,10 +29,12 @@ sys.path.insert(0, HERE)
 # Params
 def code_fingerprint():
     """12 hex digits over every saryarka/*.py, games.py and the BAR-ATH noise summaries: any change
-    to the code that builds a cached signal gives the cache a new folder, so nothing stale is reused."""
+    to the code that builds a cached signal gives the cache a new folder, so nothing stale is reused.
+    study_*.py scripts only read the caches and decode, so they are left out."""
     import hashlib
     digest = hashlib.sha256()
-    files = sorted(os.path.join(HERE, name) for name in os.listdir(HERE) if name.endswith(".py"))
+    files = sorted(os.path.join(HERE, name) for name in os.listdir(HERE)
+                   if name.endswith(".py") and not name.startswith("study_"))
     files += [os.path.join(ROOT, "games.py")]
     files += sorted(os.path.join(ROOT, "data", name) for name in os.listdir(os.path.join(ROOT, "data"))
                     if name.endswith("_stats.json"))

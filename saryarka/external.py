@@ -280,6 +280,15 @@ def load(game):
     return skillcorner.skillcorner_match(game)
 
 
+def dead_trust(game):
+    """Per-frame mask of answers a dead-ball model may learn from: all of Metrica's; SkillCorner's
+    minus D that only its 3-second rule made (skillcorner.dead_trust)."""
+    if game in GAMES:
+        return np.ones(len(load(game)[1]), bool)
+    import skillcorner
+    return skillcorner.dead_trust(game)
+
+
 def all_games():
     """Every external game: Metrica's three, then SkillCorner's matches if they are downloaded."""
     import skillcorner

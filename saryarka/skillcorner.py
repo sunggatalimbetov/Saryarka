@@ -111,11 +111,14 @@ def stoppages(game):
 
 
 def labels_10fps(raw, logged):
-    """(per-frame answers, kickoff frame per half) at 10 fps, per the rules in the module docstring."""
+    """(per-frame answers, kickoff frame per half, D-by-rule-only mask) at 10 fps, per the rules in
+    the module docstring. The mask marks D frames backed by no logged stoppage: a dead-ball model
+    should not learn from them (they may be live loose balls)."""
     group, period, seen = raw["group"], raw["period"], raw["seen"]
     n = len(group)
     labels = np.full(n, "X", dtype="<U1")
     kickoffs = []
+    rule_only = np.zeros(n, bool)  # D only because of the STOPPAGE_S rule, no logged stoppage
     in_stoppage = np.zeros(n, bool)
     for start, stop, _ in logged:
         in_stoppage[start:stop] = True
@@ -142,10 +145,11 @@ def labels_10fps(raw, logged):
                 labels[i] = "HA"[g]
             elif i < kickoff or in_stoppage[i] or long_run[i - first] or owner is None:
                 labels[i] = "D"
+                rule_only[i] = not (i < kickoff or in_stoppage[i] or owner is None)
             else:
                 labels[i] = "HA"[owner]
     labels[~seen] = "X"
-    return labels, kickoffs
+    return labels, kickoffs, rule_only
 
 
 def restarts_10fps(labels, logged, kickoffs, ball):
@@ -209,7 +213,7 @@ def skillcorner_match(game):
     meta = read_meta(game)
     raw = read_raw(game)
     logged = stoppages(game)
-    labels, kickoffs = labels_10fps(raw, logged)
+    labels, kickoffs, _ = labels_10fps(raw, logged)
     restarts = restarts_10fps(labels, logged, kickoffs, raw["ball"])
     pitch = (float(meta["pitch_length"]), float(meta["pitch_width"]))
     players, ball, labels, events_restarts = upsample(raw, labels, restarts, pitch)
@@ -219,6 +223,16 @@ def skillcorner_match(game):
     match = Match("skillcorner{}".format(game), players, team_of_slot, ball, perfect_tags(restarts, FPS),
                   None, FPS, pitch, perfect_goal_tags(events_restarts, FPS))
     return match, labels, restarts
+
+
+def dead_trust(game):
+    """25 fps mask: False on D frames that only the STOPPAGE_S rule made D (see labels_10fps)."""
+    raw = read_raw(game)
+    _, _, rule_only = labels_10fps(raw, stoppages(game))
+    n10 = len(rule_only)
+    n = int((n10 - 1) * FPS / SOURCE_FPS) + 1
+    nearest = np.minimum(np.round(np.arange(n) * SOURCE_FPS / FPS).astype(int), n10 - 1)
+    return ~rule_only[nearest]
 
 
 if __name__ == "__main__":

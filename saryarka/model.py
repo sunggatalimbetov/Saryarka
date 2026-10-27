@@ -40,7 +40,10 @@ BOOSTING = {"max_iter": 300, "learning_rate": 0.1, "max_leaf_nodes": 31, "min_sa
             "l2_regularization": 1.0, "early_stopping": False}
 # Signals that change sign when home and away swap; home_* <-> away_* are swapped; the rest keep.
 SIGN_FLIP = ("near_gap", "count2_gap", "count5_gap", "touch_last", "ball_v_forward", "ball_x_forward",
-             "push_gap", "press_gap", "width_gap", "length_gap", "vote_share", "phase_team")
+             "push_gap", "press_gap", "width_gap", "length_gap", "vote_share", "phase_team",
+             # tune_v11.py's fast signals (not in v10)
+             "touch_next", "touch_weak_last", "touch_weak_next", "near_gap_past", "near_gap_future",
+             "close_gap", "control_gap")
 
 
 def mirror(f):

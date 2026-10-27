@@ -7,6 +7,7 @@ For every truth spell shorter than SHORT_S that v10 matches at no IoU >= 0.3, it
 
     .venv/bin/python saryarka/study_short.py            # the diagnostic, read-only
     .venv/bin/python saryarka/study_short.py evidence   # S1: reshaped evidence x switch cost vs v10
+    .venv/bin/python saryarka/study_short.py model      # S2: tune_v11.py's sharper P(home) vs v10
 
 S1 reshapes the evidence the decoder sums, so that confident frames count for more than unsure ones
 and a short possession the model is sure of can pay for its two switches, while frames near 0.5
@@ -124,6 +125,56 @@ def evidence_study(pool, games):
         ", ".join("{} {:+.3f}".format(k, v) for k, v in drops.items()), "BETTER" if ok else "no clear change"))
 
 
+MODEL_COSTS = (3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0)
+
+
+def model_case(job):
+    """v10's decoder on tune_v11's held-out P(home) ("plain", "short"), switch cost grid."""
+    import warnings
+    warnings.filterwarnings("ignore")
+    import tune_v11
+    game, seed = job
+    c = sd.case(game, seed)
+    dead, teams = sd.v9_dead(c), sd.tag_teams(c, sd.TAG_TEAM_FLIP)
+    base = v10_labels(c)
+    live = np.isin(c["labels"], ["H", "A"])
+    truth_home = c["labels"][live] == "H"
+    out = {"v10": (sd.spell_f1(c["gt"], base),) + short_found(c, base) + (np.mean((c["p_home"][live] > 0.5) == truth_home),)}
+    z = dict(np.load(tune_v11.oof_path(game, seed)))
+    z["old"] = c["p_home"]  # v10's own P(home): separates a new switch cost from new probabilities
+    for name in ("old",) + tune_v11.MODELS:
+        c["p_home"] = z[name].astype(float)
+        acc = np.mean((c["p_home"][live] > 0.5) == truth_home)
+        for cost in MODEL_COSTS:
+            labels = shaped_labels(c, dead, teams, "pow", 1.0, cost)
+            out["{}/c{:g}".format(name, cost)] = (sd.spell_f1(c["gt"], labels),) + short_found(c, labels) + (acc,)
+    return c["match"].name, seed, out
+
+
+def model_study(pool, games):
+    from harness import lomo, source
+    rows = list(pool.imap_unordered(model_case, [(g, s) for g in games for s in TEST_SEEDS]))
+    by = {}
+    for game, _, r in rows:
+        by.setdefault(game, []).append(r)
+    full = {g: {k: np.mean([r[k] for r in rs], axis=0) for k in rs[0]} for g, rs in by.items()}
+    ms = sorted(full, key=lambda m: (source(m) != "metrica", m))
+    base = {m: full[m]["v10"][0] for m in ms}
+    print("S2 sharper P(home), v10 decoder; in-sample all-23 means:")
+    for k in full[ms[0]]:
+        v = np.mean([full[m][k] for m in ms], axis=0)
+        print("  {:<10} spellF1 {:.3f}  short found {:.0f}/match, short phantoms {:.0f}/match, per-frame team {:.1%}".format(k, *v))
+    for name in ("old",) + __import__("tune_v11").MODELS:
+        table = {m: {k: v[0] for k, v in full[m].items() if k.startswith(name + "/")} for m in ms}
+        picked = lomo(table)
+        held = {m: picked[m][1] for m in ms}
+        ok, wins, drops = sd.verdict(held, base, ms)
+        print("{}: picks {} | held-out all {:.3f} vs v10 {:.3f} | wins {}/{} | {} -> {}".format(
+            name, sorted({picked[m][0] for m in ms}), np.mean(list(held.values())), np.mean(list(base.values())),
+            wins, len(ms), ", ".join("{} {:+.3f}".format(k, v) for k, v in drops.items()),
+            "BETTER" if ok else "no clear change"))
+
+
 def short_case(job):
     import warnings
     warnings.filterwarnings("ignore")
@@ -169,9 +220,10 @@ def main():
     import external
     from harness import source
     games = external.all_games()
-    if sys.argv[1:] == ["evidence"]:
+    studies = {"evidence": evidence_study, "model": model_study}
+    if sys.argv[1:2] and sys.argv[1] in studies:
         with multiprocessing.get_context("spawn").Pool(sd.WORKERS) as pool:
-            evidence_study(pool, games)
+            studies[sys.argv[1]](pool, games)
         return
     with multiprocessing.get_context("spawn").Pool(sd.WORKERS) as pool:
         results = list(pool.imap_unordered(short_case, [(g, s) for g in games for s in TEST_SEEDS]))

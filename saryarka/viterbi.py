@@ -62,11 +62,11 @@ def decode(share, switch_cost):
     return out
 
 
-def labels(codes, window, switch_cost, dead_spans, touch=None, touch_weight=0.0):
+def labels(codes, window, switch_cost, dead_spans, touch=None, touch_weight=0.0, abstain=True):
     """H/A from the decoder over the +/- window vote, X where the window sees no ball, D on `dead_spans` [(start, stop)].
 
     v6: `touch` (+1 / -1 / 0 per frame, the team that touched last) is blended into the evidence
-    with `touch_weight`.
+    with `touch_weight`. v10: abstain=False keeps the decoder's team where the window sees no ball.
     """
     out = np.full(len(codes), "X", dtype="<U1")
     share = vote_share(codes, window)
@@ -85,7 +85,8 @@ def labels(codes, window, switch_cost, dead_spans, touch=None, touch_weight=0.0)
     seen_cumulative = np.concatenate(([0], np.cumsum(seen)))
     index = np.arange(len(codes))
     low, high = np.maximum(0, index - window), np.minimum(len(codes), index + window + 1)
-    out[seen_cumulative[high] == seen_cumulative[low]] = "X"  # no ball in the window, as in v1
+    if abstain:
+        out[seen_cumulative[high] == seen_cumulative[low]] = "X"  # no ball in the window, as in v1
     for start, stop in cuts:
         out[start:stop] = "D"
     return out

@@ -159,10 +159,17 @@ def spans(match, p_dead, stage_a=True, stage_b=True, t_low=T_LOW, t_high=T_HIGH,
     return sorted(out)
 
 
-def labels(match, codes, p_home, dead, window, switch_cost):
-    """v9 labels: the v8 decoder over 2 p_home - 1, cut at the given dead spans."""
+def labels(match, codes, p_home, dead, window, switch_cost, abstain=True, teams=None):
+    """v9 labels: the v8 decoder over 2 p_home - 1, cut at the given dead spans.
+
+    v10: abstain=False (no X in ball dropouts) and `teams` [(restart frame, team)] tilting the
+    evidence after team-naming restart tags (restart_prior.py)."""
     import core
+    import restart_prior
     import viterbi
+    evidence = 2 * p_home - 1
+    if teams:
+        evidence = restart_prior.tilt(evidence, teams, match.fps)
     frames = int(round(window * match.fps / core.REFERENCE_FPS))
     return viterbi.labels(codes, frames, switch_cost * match.fps / core.REFERENCE_FPS, dead,
-                          touch=2 * p_home - 1, touch_weight=1.0)
+                          touch=evidence, touch_weight=1.0, abstain=abstain)

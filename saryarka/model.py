@@ -13,7 +13,8 @@ spellF1 0.407 vs v6 0.355, wins 3/3. Without the phase tags 0.402, so the gain d
 the faked tags. Largest weights: vote share, team width gap, phase tags, ball moving forward,
 length gap, team push.
 
-    .venv/bin/python saryarka/model.py                 # v9: trains, writes evaluation/results/saryarka_v9_*.csv
+    .venv/bin/python saryarka/model.py                 # v10: trains, writes evaluation/results/saryarka_v10.csv
+    .venv/bin/python saryarka/model.py --version v9    # v9: saryarka_v9_*.csv
     .venv/bin/python saryarka/model.py --version v8    # without the learned dead ball
     .venv/bin/python saryarka/model.py --version v7    # the logistic model, Metrica only
 """
@@ -183,6 +184,14 @@ def train_v8():
 V9_DEAD = {"t_low": 0.3, "t_high": 0.8, "min_dead_s": 3.0}
 
 
+# v10 (27 Oct): v9 + no forced X in ball dropouts (A2) + the team-naming restart tags as a nudge
+# (A3, restart_prior.py). Decoder-only changes, judged on cached held-out v9 probabilities
+# (study_decode.py, rule fixed beforehand: all-23 mean up, >= 16/23 wins, no source -0.01):
+# A2 0.448 vs v9 0.409, wins 23/23, switch cost 4 picked leave-one-out from 2/3/4; A3 on top
+# 0.451 vs 0.448, wins 19/23. Dead spans are v9's, so the BAR-ATH guard is unchanged.
+V10_SWITCH_COST = 4.0
+
+
 def train_dead():
     """v9's dead-ball model: balanced boosting on every external match's cached dead-ball rows."""
     import external
@@ -201,7 +210,7 @@ if __name__ == "__main__":
     import features
 
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--version", choices=("v7", "v8", "v9"), default="v9")
+    parser.add_argument("--version", choices=("v7", "v8", "v9", "v10"), default="v10")
     version = parser.parse_args().version
     fit_, names = train_on_external() if version == "v7" else train_v8()
     cost = SWITCH_COST if version == "v7" else V8_SWITCH_COST
@@ -209,12 +218,19 @@ if __name__ == "__main__":
     codes = core.nearest_team(match)
     probability = home_probability(fit_, names, features.match_features(match, codes))
     dead = None
-    if version == "v9":
+    if version in ("v9", "v10"):
         import deadball
         dead_fit, dead_names = train_dead()
         p_dead = deadball.probability(dead_fit, dead_names, deadball.build(match))
         dead = deadball.spans(match, p_dead, **V9_DEAD)
         np.save(os.path.join(core.ROOT, "data", "bar_ath_p_dead.npy"), p_dead)  # for summary checks only
+    if version == "v10":
+        import restart_prior
+        teams = restart_prior.restart_teams(match, restart_prior.smart_tagging_teams(match.name))
+        out = deadball.labels(match, codes, probability, dead, WINDOW, V10_SWITCH_COST, abstain=False, teams=teams)
+        path = core.write_submission(os.path.join(core.RESULTS_DIR, "saryarka_v10.csv"), out)
+        print("{:<22} -> {}".format("saryarka_v10", os.path.relpath(path, core.ROOT)))
+        sys.exit(0)
     for window in (WINDOW, 125):
         name = "saryarka_{}_smooth{}".format(version, window)
         out = (labels(match, codes, probability, window, cost) if dead is None else

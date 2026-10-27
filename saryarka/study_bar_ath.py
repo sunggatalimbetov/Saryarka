@@ -3,7 +3,7 @@
 Trains v9's two models on all 23 external matches once (as model.py does) and keeps P(home) and
 P(dead) in data/ (git ignores it). Then prints, for a decoder setting, the BAR-ATH guard agreed on
 27 Oct (fixed before results): dead share of the graded halves 25-45%, at most 60 untagged
-stoppages added (stage B) inside the graded halves; plus possessions per half.
+stoppages in our output (see guard); plus possessions per half.
 
     .venv/bin/python saryarka/study_bar_ath.py            # v9 as shipped: expect 42.6% dead, 60 new
 """
@@ -52,16 +52,20 @@ def in_halves(frame):
 
 
 def guard(match, dead, labels):
-    """(passes, summary dict) for dead spans `dead` and the labels decoded with them."""
+    """(passes, summary dict) for dead spans `dead` and the labels decoded with them.
+
+    New stoppages = D runs of our output that touch the graded halves and overlap no tagged span
+    (the count behind v9's "60", reproduced 27 Oct; adjacent spans merge into one run)."""
     import core
-    base = core.dead_spans(match, goals=True)
     covered = np.zeros(len(labels), bool)
-    for a, b in base:
+    for a, b in core.dead_spans(match, goals=True):
         covered[a:b] = True
-    new = [(a, b) for a, b in dead if in_halves((a + b) // 2) and not covered[max(a - 1, 0):b + 1].any()]
     graded = np.zeros(len(labels), bool)
     for a, b in HALVES:
         graded[a:b] = True
+    edges = np.diff(np.concatenate(([0], (labels == "D").astype(np.int8), [0])))
+    runs = zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1))
+    new = [(a, b) for a, b in runs if graded[a:b].any() and not covered[a:b].any()]
     share = np.mean(labels[graded] == "D")
     spells = []
     for a, b in HALVES:

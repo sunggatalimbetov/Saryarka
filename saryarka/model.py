@@ -13,7 +13,8 @@ spellF1 0.407 vs v6 0.355, wins 3/3. Without the phase tags 0.402, so the gain d
 the faked tags. Largest weights: vote share, team width gap, phase tags, ball moving forward,
 length gap, team push.
 
-    .venv/bin/python saryarka/model.py                 # v10: trains, writes evaluation/results/saryarka_v10.csv
+    .venv/bin/python saryarka/model.py                 # v11: trains, writes evaluation/results/saryarka_v11.csv
+    .venv/bin/python saryarka/model.py --version v10   # saryarka_v10.csv
     .venv/bin/python saryarka/model.py --version v9    # v9: saryarka_v9_*.csv
     .venv/bin/python saryarka/model.py --version v8    # without the learned dead ball
     .venv/bin/python saryarka/model.py --version v7    # the logistic model, Metrica only
@@ -195,6 +196,34 @@ V9_DEAD = {"t_low": 0.3, "t_high": 0.8, "min_dead_s": 3.0}
 V10_SWITCH_COST = 4.0
 
 
+# v11 (27-28 Oct, short possessions): v10 with frames inside short (< 5 s) truth possessions counting
+# 3x in training (tune_v11.SHORT_WEIGHT), so P(home) reacts faster, and a higher switch cost to
+# drop the phantoms that brings. Same signals as v10: tune_v11.py's 8 fast signals added nothing
+# (study_short.py). Held-out on cached probabilities, rule as for v10: 0.459 vs v10 0.451, wins
+# 20/23 (Metrica +0.002, SkillCorner +0.008); costs 8 and 10 were picked leave-one-out (in-sample
+# both 0.459), 8 is used since it keeps more short possessions. Dead spans are v9's.
+V11_SWITCH_COST = 8.0
+
+
+def train_v11():
+    """v11's possession model: v8's boosting, short-possession frames weighted, v10's signals only."""
+    import external
+    import tune_v11
+    games = external.all_games()
+    jobs = [(g, s) for g in games for s in tune_v11.TRAIN_SEEDS]
+    for job in jobs:
+        tune_v11.build(job)  # no-op when cached
+    parts = [np.load(tune_v11.cache_path(g, s)) for g, s in jobs]
+    all_names = list(parts[0]["names"])
+    keep = [i for i, n in enumerate(all_names) if n not in tune_v11.EXTRA]
+    sources = np.concatenate([np.full(len(p["y"]), g in external.GAMES) for (g, _), p in zip(jobs, parts)])
+    X = np.vstack([p["X"][:, keep] for p in parts]).astype(float)
+    y = np.concatenate([p["y"] for p in parts])
+    short = np.concatenate([p["short"] for p in parts])
+    w = tune_v11.source_weights(sources) * np.where(short, tune_v11.SHORT_WEIGHT, 1.0)
+    return fit(X, y, "boosting", w), [all_names[i] for i in keep]
+
+
 def train_dead():
     """v9's dead-ball model: balanced boosting on every external match's cached dead-ball rows."""
     import external
@@ -213,26 +242,28 @@ if __name__ == "__main__":
     import features
 
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--version", choices=("v7", "v8", "v9", "v10"), default="v10")
+    parser.add_argument("--version", choices=("v7", "v8", "v9", "v10", "v11"), default="v11")
     version = parser.parse_args().version
-    fit_, names = train_on_external() if version == "v7" else train_v8()
+    fit_, names = train_on_external() if version == "v7" else train_v11() if version == "v11" else train_v8()
     cost = SWITCH_COST if version == "v7" else V8_SWITCH_COST
     match = core.bar_ath_match()
     codes = core.nearest_team(match)
     probability = home_probability(fit_, names, features.match_features(match, codes))
     dead = None
-    if version in ("v9", "v10"):
+    if version in ("v9", "v10", "v11"):
         import deadball
         dead_fit, dead_names = train_dead()
         p_dead = deadball.probability(dead_fit, dead_names, deadball.build(match))
         dead = deadball.spans(match, p_dead, **V9_DEAD)
         np.save(os.path.join(core.ROOT, "data", "bar_ath_p_dead.npy"), p_dead)  # for summary checks only
-    if version == "v10":
+    if version in ("v10", "v11"):
         import restart_prior
         teams = restart_prior.restart_teams(match, restart_prior.smart_tagging_teams(match.name))
-        out = deadball.labels(match, codes, probability, dead, WINDOW, V10_SWITCH_COST, abstain=False, teams=teams)
-        path = core.write_submission(os.path.join(core.RESULTS_DIR, "saryarka_v10.csv"), out)
-        print("{:<22} -> {}".format("saryarka_v10", os.path.relpath(path, core.ROOT)))
+        cost = V10_SWITCH_COST if version == "v10" else V11_SWITCH_COST
+        out = deadball.labels(match, codes, probability, dead, WINDOW, cost, abstain=False, teams=teams)
+        name = "saryarka_" + version
+        path = core.write_submission(os.path.join(core.RESULTS_DIR, name + ".csv"), out)
+        print("{:<22} -> {}".format(name, os.path.relpath(path, core.ROOT)))
         sys.exit(0)
     for window in (WINDOW, 125):
         name = "saryarka_{}_smooth{}".format(version, window)

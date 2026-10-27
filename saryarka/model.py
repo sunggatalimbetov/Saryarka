@@ -21,6 +21,10 @@ length gap, team push.
 import os
 import sys
 
+# One thread per numeric library: the same file on any machine, whatever its core count.
+for _var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "MKL_NUM_THREADS"):
+    os.environ.setdefault(_var, "1")
+
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -170,11 +174,12 @@ def train_v8():
 
 # v9, from tune_v9.py (27 Oct): v8 + the learned dead-ball probability (deadball.py), tagged spans
 # backdated (stage A) and untagged stoppages added (stage B). Leave-one-match-out picked
-# 0.3/0.6/2 (held-out 0.424 vs v8 0.314, wins 23/23), but on BAR-ATH that adds 72-76 untagged
-# stoppages, over the limit of 60 fixed beforehand (with dead share 25-45%). The setting used is
-# the leave-one-out grid's least aggressive one that keeps BAR-ATH inside both limits, judged on
-# summary counts of our own output only (no answers): 0.3/0.8/3, harness 0.418, wins 23/23;
-# BAR-ATH 60 new stoppages, 42.6% dead.
+# 0.3/0.6/2, but on BAR-ATH that adds 72-76 untagged stoppages, over the limit of 60 fixed
+# beforehand (with dead share 25-45%). The setting used is the grid's least aggressive one that
+# keeps BAR-ATH inside both limits, judged on summary counts of our own output only (no answers):
+# 0.3/0.8/3. After the fake-tag leak fixes (phases.delay_starts, noise.restart_leads), held-out
+# over 23 matches: v9 0.409 vs v8 0.305, wins 23/23 (Metrica 0.478, SkillCorner 0.398);
+# BAR-ATH 42.6% dead, 60 new stoppages.
 V9_DEAD = {"t_low": 0.3, "t_high": 0.8, "min_dead_s": 3.0}
 
 

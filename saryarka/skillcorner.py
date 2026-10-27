@@ -49,12 +49,10 @@ INTERRUPTION_TYPES = {"throw_in": "throw-in", "corner": "corner kick", "goal_kic
 GROUPS = {"home team": 0, "away team": 1}
 
 
-def match_ids():
-    with open(os.path.join(DATA, "matches.json")) as handle:
-        return sorted(m["id"] for m in json.load(handle))
-
-
-GAMES = tuple(match_ids()) if os.path.exists(os.path.join(DATA, "matches.json")) else ()
+# The 20 matches at the pinned commit (fetch_external.SKILLCORNER_COMMIT). Fixed here so a later
+# upstream addition cannot silently change the training set.
+GAMES = (1874553, 1886347, 1899585, 1925299, 1927964, 1953632, 1959846, 1986691, 1996435, 1996436,
+         2006229, 2006363, 2007448, 2007721, 2010085, 2011166, 2013725, 2015213, 2016236, 2017461)
 
 
 def path(game, suffix):

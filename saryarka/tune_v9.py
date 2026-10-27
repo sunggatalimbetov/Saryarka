@@ -62,6 +62,7 @@ def build_dead(job):
     import noise
     game, seed = job
     path = dead_path(game, seed)
+    os.makedirs(CACHE, exist_ok=True)
     if os.path.exists(path):
         return path
     match, labels, restarts = external.load(game)
@@ -158,10 +159,12 @@ def main():
     from harness import lomo, source
     games = external.all_games()
     ctx = multiprocessing.get_context("spawn")
-    jobs = [(g, s) for g in games for s in TRAIN_SEEDS + TEST_SEEDS if not os.path.exists(dead_path(g, s))]
-    if jobs:
-        with ctx.Pool(BUILD_WORKERS) as pool:
-            list(pool.imap_unordered(build_dead, jobs))
+    import tune_v8
+    for builder, path_of in ((build_dead, dead_path), (tune_v8.build, cache_path)):
+        jobs = [(g, s) for g in games for s in TRAIN_SEEDS + TEST_SEEDS if not os.path.exists(path_of(g, s))]
+        if jobs:
+            with ctx.Pool(BUILD_WORKERS) as pool:
+                list(pool.imap_unordered(builder, jobs))
     with ctx.Pool(FOLD_WORKERS) as pool:
         results = dict(pool.imap_unordered(saved_fold, games))
     matches = sorted(results, key=lambda m: (source(m) != "metrica", m))

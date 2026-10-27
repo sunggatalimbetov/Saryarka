@@ -20,17 +20,28 @@ METRICA_URL = "https://github.com/metrica-sports/sample-data.git"
 METRICA_DIR = os.path.join(EXTERNAL, "metrica-sample-data")
 SKILLCORNER_URL = "https://github.com/SkillCorner/opendata.git"
 SKILLCORNER_DIR = os.path.join(EXTERNAL, "skillcorner-opendata")
-SKILLCORNER_MEDIA = "https://media.githubusercontent.com/media/SkillCorner/opendata/master/data/matches/{0}/{0}_tracking_extrapolated.jsonl"
+SKILLCORNER_MEDIA = "https://media.githubusercontent.com/media/SkillCorner/opendata/{1}/data/matches/{0}/{0}_tracking_extrapolated.jsonl"
+# Pinned 27 Oct: the exact data every number in the repo was built from. Upstream may add matches
+# or fix files later; the harness and the trained models must not change with it.
+METRICA_COMMIT = "e706dd506b360d69d9d123d5b8026e7294b13996"
+SKILLCORNER_COMMIT = "4340d274572876239c154c90bc507a9b3250a656"
 
 
-def clone(url, folder):
+def clone(url, folder, commit):
+    """Shallow clone of exactly `commit`; refuses a folder already at another commit."""
+    env = dict(os.environ, GIT_LFS_SKIP_SMUDGE="1")
     if os.path.isdir(folder):
         print("already there:", os.path.relpath(folder, ROOT))
     else:
-        subprocess.run(["git", "clone", "--depth", "1", url, folder], check=True,
-                       env=dict(os.environ, GIT_LFS_SKIP_SMUDGE="1"))
-    return subprocess.run(["git", "-C", folder, "rev-parse", "HEAD"], check=True,
+        os.makedirs(folder)
+        for args in (["init", "-q"], ["remote", "add", "origin", url], ["fetch", "-q", "--depth", "1", "origin", commit],
+                     ["checkout", "-q", "FETCH_HEAD"]):
+            subprocess.run(["git", "-C", folder] + args, check=True, env=env)
+    head = subprocess.run(["git", "-C", folder, "rev-parse", "HEAD"], check=True,
                           capture_output=True, text=True).stdout.strip()
+    if head != commit:
+        raise SystemExit("{} is at {}, expected {}".format(folder, head, commit))
+    return head
 
 
 def skillcorner_tracking():
@@ -43,12 +54,13 @@ def skillcorner_tracking():
             if not handle.read(200).startswith(b"version https://git-lfs"):
                 continue
         print("fetching tracking", game, flush=True)
-        subprocess.run(["curl", "-sSL", "--retry", "3", "-o", target + ".part", SKILLCORNER_MEDIA.format(game)], check=True)
+        subprocess.run(["curl", "-sSL", "--retry", "3", "-o", target + ".part",
+                        SKILLCORNER_MEDIA.format(game, SKILLCORNER_COMMIT)], check=True)
         os.replace(target + ".part", target)
 
 
 if __name__ == "__main__":
     os.makedirs(EXTERNAL, exist_ok=True)
-    print("metrica sample data at commit", clone(METRICA_URL, METRICA_DIR))
-    print("skillcorner open data at commit", clone(SKILLCORNER_URL, SKILLCORNER_DIR))
+    print("metrica sample data at commit", clone(METRICA_URL, METRICA_DIR, METRICA_COMMIT))
+    print("skillcorner open data at commit", clone(SKILLCORNER_URL, SKILLCORNER_DIR, SKILLCORNER_COMMIT))
     skillcorner_tracking()

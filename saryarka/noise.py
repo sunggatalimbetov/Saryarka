@@ -46,8 +46,12 @@ BLUR_S = 0.3             # tracker-like blur of the true ball (s), centred; fitt
 WOBBLE_DRIFT_M = 0.75    # ball position error, std per axis (m); fitted by fit_wobble.py
 WOBBLE_RATE = 4.0        # how fast the error wanders (rad/s, critically damped spring)
 WOBBLE_SMOOTH_S = 0.2    # time constant of two passes of exponential smoothing on the error
-PHASE_SPILL = {"build": 0.104, "progression": 0.531, "chances": 1.0, "transition": 1.0}  # phases.py
-PHASE_FLIP = {"build": 0.0, "progression": 0.0, "chances": 0.265, "transition": 0.077}
+PHASE_SPILL = {"build": 0.065, "progression": 0.413, "chances": 1.0, "transition": 0.816}  # phases.py, 27 Oct
+PHASE_FLIP = {"build": 0.0, "progression": 0.0, "chances": 0.016, "transition": 0.0}
+# Restart tags (27 Oct): on BAR-ATH the ball restarts 0-12 s after a set-piece tag starts
+# (percentile, seconds; summary of set_pieces.restart_frame over the 48 tags it finds). A fixed lead
+# let a model read the true restart off the fake tag.
+RESTART_LEAD_QUANTILES = ((0, 0.0), (10, 1.1), (25, 3.8), (50, 5.8), (75, 7.2), (90, 9.5), (100, 11.7))
 MAX_REDRAWS = 20        # fresh dropout streams tried when the live missing share cannot be hit
 GOAL_TAG_JITTER_S = 10.0  # GOALS tags start within about this of the goal on BAR-ATH (player speeds)
 # Per source: restart counts per match (miss rates are BAR-ATH's tags against these), the ball
@@ -111,12 +115,23 @@ def onoff(rng, n, mean_on, mean_off, start_on):
     return out
 
 
-def noisy_tags(rng, restarts, labels, fps, events=METRICA_EVENTS):
-    """Smart-Tagging-like tags with per-type misses and false alarms."""
+def restart_leads(rng, restarts):
+    """Seconds from each fake tag's start to its restart: BAR-ATH's spread for set pieces
+    (RESTART_LEAD_QUANTILES), a fixed 3.4 s for kickoffs (BAR-ATH: 3.0-3.3 s)."""
+    q = np.array(RESTART_LEAD_QUANTILES)
+    draws = rng.random(len(restarts))
+    return [3.4 if kind.startswith("kick off") else float(np.interp(u, q[:, 0] / 100, q[:, 1]))
+            for (_, kind, _, _), u in zip(restarts, draws)]
+
+
+def noisy_tags(rng, restarts, labels, fps, events=METRICA_EVENTS, lead_rng=None):
+    """Smart-Tagging-like tags with per-type misses and false alarms.
+
+    lead_rng: draw each tag's restart lead from BAR-ATH's spread instead of a fixed 5.4 s."""
     from external import perfect_tags
     rates = miss_rates(events)
     kept = [r for r in restarts if rng.random() >= rates.get(r[1], 0.0)]
-    tags = perfect_tags(kept, fps)
+    tags = perfect_tags(kept, fps, None if lead_rng is None else restart_leads(lead_rng, kept))
     live_frames = np.flatnonzero(np.isin(labels, ["H", "A"]))
     kinds = sorted(BAR_ATH_TAGS)
     for _ in range(int(round(FALSE_TAG_SHARE * len(tags)))):
@@ -240,7 +255,8 @@ def noisy_match(match, labels, restarts, seed, stats=None, drift=None, rate=WOBB
         frames = np.arange(start, stop)[seen]
         ball[frames, 0], ball[frames, 1], ball[frames, 2] = spot[0], spot[1], np.nan
 
-    tags = noisy_tags(rng, restarts, labels, match.fps, source["events"])
+    tags = noisy_tags(rng, restarts, labels, match.fps, source["events"],
+                      rng_for(match.name + "/tag-lead", seed))  # own stream: other draws unchanged
     goal_tags = [(min(end - 1, max(0, start + int(round(rng.uniform(-1, 1) * GOAL_TAG_JITTER_S * match.fps)))), end)
                  for start, end in match.goal_tags]  # drawn last, so the locked noise above is unchanged
     ball[:, :2] = blur(ball[:, :2], match.fps, blur_s)  # after the ball is placed, before it wobbles
@@ -248,5 +264,7 @@ def noisy_match(match, labels, restarts, seed, stats=None, drift=None, rate=WOBB
         ball[:, :2] += wobble(rng_for(match.name + "/wobble", seed), len(ball), match.fps,
                                  drift, rate, smooth_s)
     import phases  # own stream, so nothing above changes
-    phase_tags = phases.fake(match, labels, rng_for(match.name + "/phases", seed), PHASE_FLIP, PHASE_SPILL)
+    phase_tags = phases.delay_starts(
+        phases.fake(match, labels, rng_for(match.name + "/phases", seed), PHASE_FLIP, PHASE_SPILL),
+        rng_for(match.name + "/phase-delay", seed), match.fps)
     return replace(match, ball=ball, restart_tags=tags, goal_tags=goal_tags, phase_tags=phase_tags), scale

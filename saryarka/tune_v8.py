@@ -27,7 +27,23 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 
 # Params
-CACHE = os.path.join(ROOT, "data", "external", "features-cache")
+def code_fingerprint():
+    """12 hex digits over every saryarka/*.py, games.py and the BAR-ATH noise summaries: any change
+    to the code that builds a cached signal gives the cache a new folder, so nothing stale is reused."""
+    import hashlib
+    digest = hashlib.sha256()
+    files = sorted(os.path.join(HERE, name) for name in os.listdir(HERE) if name.endswith(".py"))
+    files += [os.path.join(ROOT, "games.py")]
+    files += sorted(os.path.join(ROOT, "data", name) for name in os.listdir(os.path.join(ROOT, "data"))
+                    if name.endswith("_stats.json"))
+    for path in files:
+        digest.update(os.path.relpath(path, ROOT).encode())
+        with open(path, "rb") as handle:
+            digest.update(handle.read())
+    return digest.hexdigest()[:12]
+
+
+CACHE = os.path.join(ROOT, "data", "external", "features-cache", code_fingerprint())
 TRAIN_SEEDS = (100, 101)
 TEST_SEEDS = (0, 1)
 WINDOW = 50
@@ -53,6 +69,7 @@ def build(job):
     import noise
     game, seed = job
     path = cache_path(game, seed)
+    os.makedirs(CACHE, exist_ok=True)
     if os.path.exists(path):
         return path
     match, labels, restarts = external.load(game)

@@ -232,15 +232,18 @@ def labels_from_events(events, period, n_frames):
     return labels, restarts
 
 
-def perfect_tags(restarts, fps=FPS):
+def perfect_tags(restarts, fps=FPS, leads=None):
     """Restarts as Smart-Tagging-like tags: 35 s long, starting where BAR-ATH's tags start.
 
     On BAR-ATH the ball restarts a median 5.4 s after a set-piece tag starts, and 3.3-3.5 s
-    after a kickoff tag starts. Those two summary numbers place the fake tags.
+    after a kickoff tag starts. Those two summary numbers place the fake tags, unless `leads`
+    gives each restart its own lead in seconds (noise.py draws them from BAR-ATH's spread).
     """
     tags = []
-    for frame, kind, _, _ in restarts:
+    for index, (frame, kind, _, _) in enumerate(restarts):
         lead, length = (3.4, 5.0) if kind.startswith("kick off") else (5.4, 35.0)
+        if leads is not None:
+            lead = leads[index]
         start = max(0, frame - int(round(lead * fps)))
         tags.append((start, start + int(round(length * fps)), kind))
     return tags

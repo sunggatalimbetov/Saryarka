@@ -15,9 +15,9 @@ The spill rate, and a wrong-team rate only where spill cannot get there, are set
 with the harness's v6 as often as real tags agree with BAR-ATH's v6 -- matching what can be
 observed, because v6's own errors depend on the situation.
 
-Calibrated 26 Oct (noise.PHASE_SPILL / PHASE_FLIP): build up spills 10%, progression 53%,
-creating chances and transitions always (chances are a fixed 30 s on BAR-ATH), with 27% and 8%
-wrong team. Known gap: fake tags cover 26% of live play, BAR-ATH's 39% (Metrica possessions are
+Calibrated 26 Oct, recalibrated 27 Oct after fake starts were delayed 6-12 s (delay_starts):
+build up spills 7%, progression 41%, transitions 82%, creating chances always (a fixed 30 s on
+BAR-ATH) with 2% wrong team. Known gap: fake tags cover 26% of live play, BAR-ATH's 39% (Metrica possessions are
 shorter, so clipped fakes are too). Where the vote share is unsure (|share| < 0.3) fake tags are
 right 65-79% of the time vs 56-65% for the vote.
 
@@ -46,6 +46,7 @@ BAR_ATH_AGREE_V6 = {"build": 0.852, "progression": 0.797, "chances": 0.555, "tra
 ZONE_FAMILY = {0: "build", 1: "progression", 2: "chances"}
 MIN_ZONE_S = 2.0     # a zone stay shorter than this does not start a phase
 TRANSITION_GAP_S = 1.0  # a change of team with at most this much dead ball in between is a transition
+START_DELAY_S = (6.0, 12.0)  # fake tags start this much after their trigger (delay_starts)
 
 
 def smart_tagging_phases(game=None):
@@ -135,6 +136,21 @@ def fake(match, labels, rng, flips, spills):
     return sorted(tags)
 
 
+def delay_starts(tags, rng, fps, delay_s=START_DELAY_S):
+    """Fake phase tags with each start pushed later by U(delay_s); tags left under 1 s are dropped.
+
+    Real phases start a median 7.6 s from the nearest change of team (vs v6 on BAR-ATH); fakes
+    started on the change itself (~4 s), which handed a model the possession's first frame.
+    A 6-12 s delay brings them to 7.3 s (27 Oct, summaries only).
+    """
+    out = []
+    for (start, end, family, team), u in zip(tags, rng.random(len(tags))):
+        start = start + int(round((delay_s[0] + u * (delay_s[1] - delay_s[0])) * fps))
+        if start < end - fps:
+            out.append((start, end, family, team))
+    return out
+
+
 def agreement(phase_tags, predicted, live):
     """{family: share of live H/A predicted frames inside its tags that match the tag's team}."""
     hits, totals = {}, {}
@@ -165,7 +181,8 @@ def calibrate(seeds=2):
         for seed in range(seeds):
             predicted = core.predict(noise.noisy_match(match, labels, restarts, seed, stats)[0], "v6", 50)
             for store, spills in ((clip, {}), (full, all_on)):
-                tags = fake(match, labels, noise.rng_for(match.name + "/phases-calibrate", seed), {}, spills)
+                tags = delay_starts(fake(match, labels, noise.rng_for(match.name + "/phases-calibrate", seed), {}, spills),
+                                    noise.rng_for(match.name + "/phase-delay", seed), match.fps)
                 for family, value in agreement(tags, predicted, live).items():
                     store.setdefault(family, []).append(value)
     spills, flips = {}, {}

@@ -19,7 +19,11 @@ export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 MKL_NUM
 echo "1/4 external matches at pinned commits"
 $PY saryarka/fetch_external.py
 
-echo "2/4 signal caches for the 23 external matches, $WORKERS at a time"
+echo "2/4 BAR-ATH noise summary (unlabelled tracking + Smart Tagging), then signal caches for the 23"
+echo "    external matches, $WORKERS at a time"
+# Built once up front: every worker's noise reads data/BAR-ATH_noise_stats.json, and workers creating
+# it together read each other's half-written file.
+$PY saryarka/noise_stats.py
 # model.py would build these one by one; this only does it in parallel. Kept out of saryarka/*.py
 # because every file there is part of the cache fingerprint (tune_v8.code_fingerprint).
 PREBUILD=data/_saryarka_prebuild.py

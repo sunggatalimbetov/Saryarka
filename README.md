@@ -1,3 +1,5 @@
+> **Team Saryarka's fork.** Our submission and how to rebuild it byte-for-byte: [saryarka/README.md](saryarka/README.md). Everything below is the organisers' original README.
+
 # More than a Hack 2027 — Phase 1: Ball Possession
 
 **Organised by [Metrica Sports](https://metrica-sports.com), [FC Barcelona](https://www.fcbarcelona.com)

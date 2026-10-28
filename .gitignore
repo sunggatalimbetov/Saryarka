@@ -62,3 +62,7 @@ __pycache__/
 venv/
 env/
 .DS_Store
+
+# -- Team Saryarka ------------------------------------------------------------------------------
+# the submission file is labels for the whole match, like evaluation/results/
+/Saryarka.csv

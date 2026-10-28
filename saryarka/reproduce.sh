@@ -5,7 +5,7 @@
 #
 # Before running (see saryarka/README.md): a Python 3.12 venv in .venv with saryarka/requirements.txt,
 # the organisers' data bundle unpacked into data/, git and curl on PATH. Downloads ~1.9 GB of
-# external matches, needs ~10 GB of free disk, takes about an hour on 8 cores.
+# external matches (the slow part), needs ~10 GB of free disk; the rest takes ~5 min on 8 cores.
 # Fails unless the file it writes is byte-identical to the one we submitted.
 set -euo pipefail
 cd "$(dirname "$0")/.."

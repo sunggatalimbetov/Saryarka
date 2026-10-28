@@ -1,13 +1,13 @@
 # Team Saryarka
 
 Our Round 1 submission for More than a Hack 2027: `Saryarka.csv`, one possession label per frame of
-BAR-ATH. The approach, data and limitations are in the technical document (`Saryarka.pdf`, submitted
-with the form). This page is only how to rebuild the file.
+BAR-ATH. The approach, data and limitations are in the technical document, [Saryarka.md](Saryarka.md)
+(submitted with the form as `Saryarka.pdf`). This page is only how to rebuild the file.
 
 ## Reproduce
 
-Tested on macOS arm64 with Python 3.12.13. Needs git, curl, ~10 GB of free disk and about an hour
-on 8 cores.
+Tested on macOS arm64 with Python 3.12.13, from a fresh clone. Needs git, curl and ~10 GB of free disk.
+The ~1.9 GB external download is the slow part; after it, about 5 minutes on 8 cores.
 
 ```bash
 git clone https://github.com/sunggatalimbetov/Saryarka.git && cd Saryarka
